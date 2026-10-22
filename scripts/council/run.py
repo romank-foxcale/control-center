@@ -270,7 +270,7 @@ class Run:
     def verify(self, name: str) -> tuple[bool, str, list[tuple[str, str, str]]]:
         say(f"   ./cc feature {self.state['feature']} verify ({name})")
         result = subprocess.run(
-            [str(self.root / "cc"), "feature", self.state["feature"], "verify", self.state["repository"], "--quality"],
+            [str(self.root / "cc"), "feature", self.state["feature"], "verify", self.state["repository"], "--quality", "--full"],
             cwd=self.root,
             capture_output=True,
             text=True,

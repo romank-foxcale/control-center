@@ -29,6 +29,6 @@ First read `../_shared/cc-cli.md` and follow it.
 - Take target names from `./cc show`; never guess them.
 - `run` executes apps, which may use the network or containers. Confirm before running an app that deploys, publishes or touches production; production actions need a dedicated adapter.
 - Never bypass Nix with `cmake`, `make`, `msbuild`, `dotnet`, `docker build`, `pytest` or similar to make something pass. A direct command is only for diagnosing a failure, and the fix goes into the Nix contract or the project.
-- Output is long; report the final REPO/TARGET/RESULT table and quote the first real failure.
+- Verify prints one line per passing gate and the last 80 lines of a failing one, with the path of its full log under `.cc-local/runs/`. Report the final REPO/GATE/RESULT table and quote the first real failure; when the tail does not show the cause, search that log instead of running verify again. `--full` streams every line, for a person at a terminal.
 - Verify takes minutes. When it runs in the background, also run `./cc watch` as a streaming watcher (the Monitor tool where available) and relay each gate start, result and stall (`⚠`, a gate silent for 3 minutes) to the user as it happens; the user must never have to ask how it is going.
 - If the Nix part cannot run, run `./cc validate` and say explicitly that the Nix part was not verified.
