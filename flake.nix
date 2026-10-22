@@ -84,6 +84,7 @@
               '';
               events = pkgs.runCommand "control-center-events" { } ''
                 ${pkgs.python3}/bin/python ${self}/scripts/events_test.py
+                ${pkgs.python3}/bin/python -B ${self}/scripts/verify_test.py
                 touch "$out"
               '';
               repositories = pkgs.runCommand "control-center-repositories" { nativeBuildInputs = [ pkgs.git ]; } ''

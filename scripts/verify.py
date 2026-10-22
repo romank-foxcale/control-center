@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -64,9 +66,18 @@ def nix(*arguments: str, capture: bool = False) -> subprocess.CompletedProcess[s
 
 
 class Gates:
-    """Run gates with their output streamed through, reporting each gate and any silence to the event stream."""
+    """Run gates, reporting each gate and any silence to the event stream.
 
-    def __init__(self, root: Path):
+    By default each gate's output goes to a log next to the event stream, and only a pass line or a failure's
+    last TAIL_LINES are printed, so an agent reading verify keeps its context for the error. `full` streams
+    everything, for a person at a terminal or a caller that keeps its own log (a council run).
+    """
+
+    TAIL_LINES = 80
+
+    def __init__(self, root: Path, full: bool = False):
+        self.root = root
+        self.full = full
         self.events, self.owned = events.own_stream(root, "verify")
         self.current: dict[str, tuple[float, str]] = {}
         self.watchdog = events.Watchdog(self.events, lambda: dict(self.current))
@@ -75,17 +86,30 @@ class Gates:
         self.events.emit("step", f"verify: {label}")
         started = time.time()
         self.current = {f"verify {label}": (started, "")}
+        log_path = self.events.path.parent / "gates" / f"{re.sub(r'[^A-Za-z0-9]+', '-', label).strip('-')}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        tail: deque[str] = deque(maxlen=self.TAIL_LINES)
         process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-        for line in process.stdout:
-            sys.stdout.write(line)
-            self.current = {f"verify {label}": (time.time(), line.strip()[:120])}
+        with log_path.open("w", encoding="utf-8") as log:
+            for line in process.stdout:
+                if self.full:
+                    sys.stdout.write(line)
+                log.write(line)
+                tail.append(line)
+                self.current = {f"verify {label}": (time.time(), line.strip()[:120])}
         process.wait()
         self.current = {}
         took = events.clock(int(time.time() - started))
+        shown = log_path.relative_to(self.root) if log_path.is_relative_to(self.root) else log_path
         if process.returncode:
             self.events.emit("error", f"verify: {label} FAIL after {took}")
+            if not self.full:
+                print(f"FAIL after {took}; last {len(tail)} lines of {shown}:")
+                sys.stdout.writelines(tail)
         else:
             self.events.emit("gate", f"verify: {label} pass in {took}")
+            if not self.full:
+                print(f"pass in {took}; log: {shown}")
         return process.returncode
 
 
@@ -94,11 +118,12 @@ def main() -> int:
     parser.add_argument("root", type=Path)
     parser.add_argument("repositories", nargs="*")
     parser.add_argument("--quality", action="store_true", help="also run quality gates such as mutation testing")
+    parser.add_argument("--full", action="store_true", help="stream every gate's full output instead of a failure's tail")
     args = parser.parse_args()
     root = args.root.resolve()
     # Keep section headers in order with the output of the nix subprocesses.
     sys.stdout.reconfigure(line_buffering=True)
-    gates = Gates(root)
+    gates = Gates(root, full=args.full)
     if gates.owned:
         gates.events.emit("start", f"verify {' '.join(args.repositories) or 'all'}", pid=os.getpid())
     gates.watchdog.start()

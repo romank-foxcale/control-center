@@ -13,7 +13,7 @@ usage() {
     '  check          Evaluate and build every flake check' \
     '  build <name>   Build .#<name>' \
     '  run <name>     Run .#<name>' \
-    '  verify [repo...] [--quality]  Run every check plus each catalog target gate (and quality gates)' \
+    '  verify [repo...] [--quality] [--full]  Run every check plus each catalog target gate (and quality gates)' \
     '  council <run|approve|reject|status|models|set-role|set> ...  Multi-model councils and their settings' \
     '  watch [run]    Follow a council or verify run live: steps, agent talk, stalls, result' \
     '  eval <run|compare|trace|regrade> ...  Measure an agent-context change: headless claude runs, graded, with tokens, cost and time' \
