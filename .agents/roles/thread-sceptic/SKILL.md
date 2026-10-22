@@ -31,7 +31,7 @@ The input's `Case:` line says which one applies.
 
 1. State the claim in one sentence: what exactly is said to be wrong, missing or fixed.
 2. Try to disprove it first. Read the code around `path:line` at the head, plus its callers, tests, validation and config. Check the `# CC notes` section of the input: these are the Control Center's recorded decisions, rules, hacks and debt, one summary each. A claim that contradicts one of them, or rests on one, cites it by path. Comments on an outdated line refer to an older commit: check whether the head still has the problem.
-3. Then try to disprove your own verdict. Pick the verdict only once that attempt fails.
+3. Then try to disprove your own verdict. Pick the verdict only once that attempt fails. Two failures to guard against: stopping when the first file you read seems to settle it, and citing a `path:line` you did not open in this run. An `EVIDENCE` line points only to code you read here.
 4. The bar is the review bar: a scenario, a quoted criterion or a cited note. Confidence, length or repetition by a commenter is not evidence. Neither is the PR author's word that something is fine.
 5. Draft a reply that the person on the other side would accept as fair: in the language of the thread, short, factual, citing `path:line`, with no flattery and no blame. For `VALID` and `PUSHBACK-HOLDS`, the reply concedes. For `PREFERENCE`, it acknowledges and leaves the choice open.
 

@@ -35,7 +35,7 @@ Run plan transitions through `cc-plan`, worktrees through `cc-worktree` and chec
 
 ## Agent-ready plan
 
-Every work package has: one outcome; an exact write scope; inputs/outputs; dependencies; a completion check. Parallel packages never change the same files or interfaces. Derive parallelism from the graph, not from the desired number of agents. Keep integration/final verification separate.
+Every work package has: one outcome; an exact write scope; inputs/outputs; dependencies; a completion check. Write each package for an agent that never saw the grilling: state the files, facts and decisions in it, never "per the findings" or "as discussed". Parallel packages never change the same files or interfaces. Derive parallelism from the graph, not from the desired number of agents. Keep integration/final verification separate.
 
 Keep task-local assumptions, risks, alternatives and unknowns in the plan. Create an ADR only for a decision that matters beyond the task; a glossary term only if agents could otherwise understand the domain differently.
 

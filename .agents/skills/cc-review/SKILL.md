@@ -31,6 +31,8 @@ Search hard for each tag; then keep only what passes its bar.
 | `[SCOPE]` | Each acceptance criterion and scope statement in the PR or its cards; changes unrelated to the stated purpose | The exact criterion it misses or contradicts, quoted with its source. Unrelated changes count only when substantial (another feature, module or behaviour), not a drive-by rename |
 | `[KNOWLEDGE]` | Conflicts with a decision, rule, hack's removal condition, recorded constraint or review lesson | The note's path and the sentence it contradicts |
 
+Two failures to guard against: stopping once the first hunks look right (config, migrations, tests and the last files of a diff are where breaks hide), and keeping a finding or a ✓ that rests on code you did not read in this review.
+
 Before keeping a finding, try to refute it: read callers, tests, validation and config that might already handle it. If the refutation holds, drop the finding. If it stays plausible but cannot be settled from the code, keep it with `(unconfirmed: <how to confirm>)`, for example the gate to run.
 
 What a check already decides is not judged again: a contract a workflow check enforces (`nix/workflows/`, `ccLib.mkContractCheck`) or a rule a static check enforces is reported only as the `[BREAK]` of that check failing in step 4, never re-derived from reading the code. Spend the judgment on what no check covers.
@@ -54,5 +56,5 @@ Checked
 ```
 
 - Order findings by tag (BREAK, SCOPE, KNOWLEDGE), then by impact.
-- Always print the Checked block, for CLEAN too: it is what makes a clean verdict trustworthy. With no acceptance criteria anywhere, say "no acceptance criteria stated; checked against the PR title and description".
+- Always print the Checked block, for CLEAN too: it is what makes a clean verdict trustworthy. A ✓ needs the line or gate result that meets the criterion; without one it is `?`. With no acceptance criteria anywhere, say "no acceptance criteria stated; checked against the PR title and description".
 - The review stays in the chat. Posting it to GitHub or Trello, approving or requesting changes are outward-facing: only when the user asks, after showing the exact text and getting a yes.
