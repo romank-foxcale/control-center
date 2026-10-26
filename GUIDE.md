@@ -111,6 +111,14 @@ The folder layout, which you never need to touch by hand:
 - **macOS:** open the folder normally.
 - Pick any model from Cursor's model picker; it's billed to your Cursor plan.
 
+### Zed
+
+Zed runs Claude Code or Codex in its Agent Panel through the Agent Client Protocol (ACP). They read the same instructions, skills and (Claude Code only) hooks as in a terminal, under your own Claude or ChatGPT login; Zed's own AI plan isn't needed. Start a thread with **Claude Agent** (Claude Code) or **Codex** from the panel's `+` menu, not with **Zed Agent**: it runs none of the CC's hooks.
+
+- **Windows:** in the command palette run `projects: open wsl`, choose **Ubuntu**, then open `~/Projects/my-project_CC`. To check the agent runs inside Ubuntu, run `uname` in Zed's terminal (`` Ctrl+` ``): it must answer `Linux`. A `PS ...\\wsl.localhost\...` prompt means the folder was opened as a Windows path (for example with *File → Open*): close it and open it again with `projects: open wsl`, later from the WSL entry in Recent Projects.
+- The agent starts in the project's first top-level folder, so the CC folder must be the only one in Zed's Project panel; opening `~/Projects` gives an agent without the CC's instructions, skills or hooks. A thread keeps the folder it started in: after reopening, start a new thread.
+- **macOS:** open the folder normally.
+
 ### Codex app or CLI
 
 - **App on Windows:** Settings → switch the agent to **WSL**, restart the app, then open `~/Projects/my-project_CC`.
