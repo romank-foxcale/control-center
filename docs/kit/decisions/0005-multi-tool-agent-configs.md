@@ -3,7 +3,7 @@ id: kit.decision.0005-multi-tool-agent-configs
 title: One set of skills for every AI tool
 status: accepted
 summary: Skills live in .agents/skills, Claude Code gets a checked copy in .claude/skills, and instructions stay in AGENTS.md.
-verified_at: 2026-10-15
+verified_at: 2026-10-26
 evidence:
   - scripts/agent-configs.py
   - CLAUDE.md
@@ -22,7 +22,7 @@ relations:
 
 ## Context
 
-People open the CC in Claude Code, Cursor, Codex and OpenCode. Codex reads project skills only from `.agents/skills`, Claude Code only from `.claude/skills`; Cursor and OpenCode read both folders. Every tool reads `AGENTS.md`, except Claude Code when a `CLAUDE.md` exists.
+People open the CC in Claude Code, Cursor, Codex, OpenCode and Zed. Codex reads project skills only from `.agents/skills`, Claude Code only from `.claude/skills`; Cursor and OpenCode read both folders. Every tool reads `AGENTS.md`, except Claude Code when a `CLAUDE.md` exists. Zed runs Claude Code or Codex through the Agent Client Protocol; the Claude adapter (`@agentclientprotocol/claude-agent-acp`) starts Claude Code with the user, project and local setting sources and keeps the native tool names, so the same `CLAUDE.md`, skills and hook matchers apply. On 2026-10-26 a Claude Agent thread in Zed on WSL had an edit of `.claude/skills` denied by the `pre-edit` hook.
 
 ## Decision
 
@@ -38,3 +38,4 @@ People open the CC in Claude Code, Cursor, Codex and OpenCode. Codex reads proje
 - `.opencode/skills` is not used: OpenCode reads `.agents/skills`.
 - Council and thread role skills live in `.agents/roles/`, which no tool lists and `./cc agents sync` does not copy; only the runners load them ([0019](0019-lean-agent-context.md)).
 - `./cc agents sync` also writes the `hooks` key of `.claude/settings.json`; hooks are Claude Code only ([0013](0013-rule-hooks.md)).
+- Zed's own agent runs no hooks, so in Zed the CC is used through Claude Code or Codex. If the ACP adapter stops loading project settings or renames tools, the hooks stop firing there without an error.

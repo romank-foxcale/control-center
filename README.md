@@ -145,6 +145,7 @@ The template contains no UI, no secrets and no production permissions.
 | [Claude Code](https://github.com/anthropics/claude-code) CLI (`claude`) | Interactive work, and the Claude roles in councils, under the user's own subscription |
 | [Codex](https://github.com/openai/codex) CLI (`codex`) | Interactive work, and the GPT roles in councils, under the user's own ChatGPT login |
 | Cursor, OpenCode | Supported editors and agents; they read the same `.agents/skills` |
+| [Zed](https://zed.dev) | Supported editor; runs Claude Code or Codex through the Agent Client Protocol, with the same skills and hooks |
 | Docker or Podman (optional) | Container end-to-end workflows |
 
 Each project repository brings its own test tools through its Nix adapter; the CC prescribes none of them.
