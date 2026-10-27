@@ -42,6 +42,7 @@ Always ask, never infer: "Which platforms does `<repo>` ship on: windows, linux,
 
 - a pure Nix check (`targets.<platform> = <derivation>`) when Nix can build and test natively for that platform;
 - `ccLib.mkWindowsHostGate` for windows: a PowerShell script that builds and tests with the real toolchain on the Windows host from WSL. Ask for the toolchain and the exact build and test commands;
+- `ccLib.mkPythonHostGate` for a Python repo that installs its requirements from PyPI on the host (windows, linux or macos): it reuses a venv per requirements and interpreter and rebuilds it weekly (`docs/kit/decisions/0027-python-gate-venv-cache.md`). Ask for the requirements files, any special install step (another index, constraints) and the test command;
 - a cross-compiled or emulated check (MinGW, Wine) only as an extra early signal, never as the only windows gate.
 
 A target the user names but nobody can gate yet stays in `targets`; mark the repo `blocked` with that reason instead of dropping the target.

@@ -130,6 +130,45 @@
                   grep -q "^+GET /ORDERS" ${drifted}/testBuildFailure.log
                   touch "$out"
                 '';
+              # The venv cache of ccLib.mkPythonHostGate: reuse, rebuild on key change, age,
+              # missing marker and CC_GATE_FRESH=1, pruning of older venvs. Building both
+              # gate variants runs ShellCheck over the generated scripts.
+              gate-venv =
+                let
+                  fixture = pkgs.writeTextDir "requirements.txt" "pytest\n";
+                  gate =
+                    platform:
+                    ccLib.mkPythonHostGate {
+                      name = "fixture";
+                      src = fixture;
+                      inherit platform;
+                    };
+                in
+                pkgs.runCommand "control-center-gate-venv" { } ''
+                  test -x ${(gate "windows").program}
+                  test -x ${(gate "linux").program}
+                  ${builtins.readFile ./nix/lib/gate-venv.sh}
+                  builds=0
+                  cc_build_venv() { mkdir -p "$1"; builds=$((builds + 1)); }
+                  cc_remove_dir() { rm -rf "$1"; }
+                  expect() { if [[ "$builds" != "$1" ]]; then echo "after $2: $builds builds, expected $1" >&2; exit 1; fi; }
+                  cache="$TMPDIR/cache"
+                  cc_gate_venv t "$cache" a 7; first="$venv"; expect 1 "first run"
+                  cc_gate_venv t "$cache" a 7; expect 1 "same key"
+                  test "$venv" = "$first"
+                  CC_GATE_FRESH=1 cc_gate_venv t "$cache" a 7; expect 2 "CC_GATE_FRESH=1"
+                  touch -d '8 days ago' "$venv/.complete"
+                  cc_gate_venv t "$cache" a 7; expect 3 "an 8-day-old venv"
+                  touch -d '6 days ago' "$venv/.complete"
+                  cc_gate_venv t "$cache" a 7; expect 3 "a 6-day-old venv"
+                  rm "$venv/.complete"
+                  cc_gate_venv t "$cache" a 7; expect 4 "a missing marker"
+                  cc_gate_venv t "$cache" b 7; expect 5 "a new key"
+                  test "$venv" != "$first"
+                  test ! -e "$first"
+                  test "$(find "$cache" -mindepth 1 -maxdepth 1 | wc -l)" = 1
+                  touch "$out"
+                '';
             }
             // pkgs.lib.optionalAttrs (builtins.pathExists "${toString ./.}/control-center.json") {
               bootstrap = pkgs.runCommand "control-center-bootstrap" { } ''

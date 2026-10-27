@@ -90,6 +90,124 @@ rec {
     );
     mkApp runner "${name}-windows-gate";
 
+  # A Python gate on a real host (windows from WSL, linux, macos) that installs `requirements`
+  # (paths in `src`) from PyPI into a venv reused between runs (kit decision 0027): one venv per
+  # dependency files, interpreter and install step, rebuilt when it is older than `maxAgeDays`
+  # or on CC_GATE_FRESH=1. The sources are copied fresh on every run and pip freeze is printed.
+  # `install` replaces the default `pip install -r`; it sees "$py" (the venv's interpreter) and
+  # "$src" (the sources as that interpreter sees them). `test` runs in the copy, extra arguments
+  # reach it as "$@". Network and host side effects, hence an app.
+  # Env: CC_GATE_FRESH=1 rebuilds the venv, CC_GATE_KEEP=1 keeps the work directory.
+  mkPythonHostGate =
+    {
+      name,
+      src,
+      platform,
+      requirements ? [ "requirements.txt" ],
+      install ? null,
+      test ? ''"$py" -m pytest -q -p no:cacheprovider "$@"'',
+      maxAgeDays ? 7,
+      # linux and macos: the Nix interpreter that makes the venv.
+      python ? pkgs.python3,
+      # windows: the command that finds the host's Python, such as "py.exe -3.13".
+      windowsPython ? "py.exe",
+      runtimeInputs ? [ ],
+    }:
+    let
+      gateName = "${name}-${platform}-gate";
+      installStep =
+        if install == null then
+          ''"$py" -m pip install --disable-pip-version-check -q''
+          + lib.concatMapStrings (file: " -r \"$src/${file}\"") requirements
+        else
+          install;
+      requirementFiles = lib.concatMapStringsSep " " (file: lib.escapeShellArg "${src}/${file}") requirements;
+      windowsHost = ''
+        # Interop calls otherwise consume the caller's stdin; gates are non-interactive.
+        exec </dev/null
+        if ! command -v wslpath >/dev/null 2>&1; then
+          echo "error: the windows gate for ${name} needs WSL on a Windows host (wslpath not found)" >&2
+          exit 1
+        fi
+        win_python="$(wslpath -u "$(${windowsPython} -c 'import sys; print(sys.executable)' | tr -d '\r')")"
+        interpreter="$("$win_python" -c 'import sys; print(sys.executable, sys.version)' | tr -d '\r')"
+        # realpath expands 8.3 names (KOZYRE~1); venv warns about those.
+        cache="$(wslpath -u "$("$win_python" -c 'import os; print(os.path.realpath(os.environ["LOCALAPPDATA"]))' | tr -d '\r')")/control-center/${name}"
+        win_temp="$(wslpath -u "$("$win_python" -c 'import os, tempfile; print(os.path.realpath(tempfile.gettempdir()))' | tr -d '\r')")"
+        work="$(mktemp -d "$win_temp/${gateName}.XXXXXX")"
+        src="$(wslpath -w ${src})"
+        venv_python=Scripts/python.exe
+        cc_make_venv() { "$win_python" -m venv "$(wslpath -w "$1")"; }
+        # Native delete: rm -rf over the WSL mount takes minutes for a venv.
+        cc_remove_dir() { (cd /mnt/c && cmd.exe /d /c rmdir /s /q "$(wslpath -w "$1")") || rm -rf "$1"; }
+      '';
+      posixHost = ''
+        ${lib.optionalString pkgs.stdenv.isLinux ''
+          # PyPI's manylinux wheels need the C++ runtime and zlib, which a Nix interpreter does not search for.
+          export LD_LIBRARY_PATH="${
+            lib.makeLibraryPath [
+              pkgs.stdenv.cc.cc.lib
+              pkgs.zlib
+            ]
+          }''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        ''}
+        interpreter=${python}
+        cache="''${XDG_CACHE_HOME:-$HOME/.cache}/control-center/${name}"
+        work="$(mktemp -d "''${TMPDIR:-/tmp}/${gateName}.XXXXXX")"
+        src=${src}
+        venv_python=bin/python
+        cc_make_venv() { ${python}/bin/python3 -m venv "$1"; }
+        cc_remove_dir() { rm -rf "$1"; }
+      '';
+      runner = pkgs.writeShellApplication {
+        name = gateName;
+        runtimeInputs = [
+          pkgs.coreutils
+          pkgs.findutils
+        ] ++ runtimeInputs;
+        text = ''
+          ${if platform == "windows" then windowsHost else posixHost}
+          export src
+          ${builtins.readFile ./gate-venv.sh}
+          cleanup() {
+            if [[ "''${CC_GATE_KEEP:-}" == 1 ]]; then
+              echo "kept: $work"
+            else
+              cc_remove_dir "$work"
+            fi
+          }
+          trap cleanup EXIT
+          cc_build_venv() {
+            cc_make_venv "$1"
+            py="$1/$venv_python"
+            ${installStep}
+          }
+          key="$(
+            cat ${requirementFiles}
+            echo "$interpreter"
+            echo ${builtins.hashString "sha256" installStep}
+          )"
+          cc_gate_venv ${gateName} "$cache" "$key" ${toString maxAgeDays}
+          py="$venv/$venv_python"
+          cp -r --no-preserve=mode ${src}/. "$work/"
+          cd "$work"
+          "$py" -c 'import platform, sys; print("python", sys.version.split()[0], "on", platform.platform())'
+          # Most requirements are lower bounds: record what this venv resolved.
+          echo "== pip freeze"
+          "$py" -m pip freeze --disable-pip-version-check
+          ${test}
+        '';
+      };
+    in
+    assert lib.assertMsg (builtins.match "[a-z0-9]+(-[a-z0-9]+)*" name != null) (
+      "python gate name must use lowercase hyphen-case"
+    );
+    assert lib.assertMsg (lib.elem platform supportedTargets) (
+      "python gate platform must be one of: ${lib.concatStringsSep ", " supportedTargets}"
+    );
+    assert lib.assertMsg (requirements != [ ]) "python gate ${name} needs at least one requirements file";
+    mkApp runner gateName;
+
   mkProject =
     {
       name,
