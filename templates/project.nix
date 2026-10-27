@@ -38,6 +38,16 @@ ccLib.mkProject {
       throw "replace-me: build and test with the real Windows toolchain"
     '';
   };
+  # A Python repo that installs requirements.txt from PyPI uses this gate instead: it reuses
+  # one venv per requirements and interpreter, rebuilt weekly or on CC_GATE_FRESH=1
+  # (docs/kit/decisions/0027-python-gate-venv-cache.md). `install` and `test` are optional.
+  # targets.windows = ccLib.mkPythonHostGate {
+  #   name = "replace-me";
+  #   inherit src;
+  #   platform = "windows";
+  #   requirements = [ "requirements.txt" ];
+  #   test = ''"$py" -m pytest -q -p no:cacheprovider tests "$@"'';
+  # };
   # Optional, run by ./cc verify --quality: mutation testing with the tool for the
   # repository's stack (docs/kit/rules/quality-gates.md). It must fail when a mutant survives.
   # quality.mutation = pkgs.runCommand "replace-me-mutation" { } ''...'';

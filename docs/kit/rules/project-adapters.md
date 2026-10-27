@@ -17,6 +17,7 @@ relations:
   - docs/kit/decisions/0006-target-platform-gates.md
   - docs/kit/rules/quality-gates.md
   - docs/kit/decisions/0022-deterministic-checks-before-review.md
+  - docs/kit/decisions/0027-python-gate-venv-cache.md
 ---
 
 # Connecting sibling projects
@@ -31,7 +32,7 @@ The adapter is created with `ccLib.mkProject` and declares:
 - `packages`: the project's artifacts;
 - `checks`: builds, tests and the static checks of its stack (formatter, linter, architecture rules; see [quality gates](quality-gates.md#static-checks));
 - `apps`: running, generation, external integrations;
-- `targets`: one gate per catalog target platform, a check or a host app (see [target gates](../decisions/0006-target-platform-gates.md));
+- `targets`: one gate per catalog target platform, a check or a host app (see [target gates](../decisions/0006-target-platform-gates.md)); a Python repo that installs its requirements on the host uses `ccLib.mkPythonHostGate`, which reuses its venv ([0027](../decisions/0027-python-gate-venv-cache.md));
 - `quality`: optional `quality.mutation` gate with the mutation tool for the repository's stack (see [quality gates](quality-gates.md));
 - `metadata`: role and owner.
 
