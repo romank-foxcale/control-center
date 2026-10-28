@@ -249,6 +249,13 @@ def check_verify_before_push(base: Path) -> None:
     assert push("git push -u origin f", worktree) is None
     assert verified.lookup(cc, verified.commit_tree(worktree))["kinds"] == ["check", "verify"], "kinds accumulate"
 
+    asked = push('git commit -q -m "Fix" && git push')
+    assert decision(asked) == "ask" and "separate command" in asked["hookSpecificOutput"]["permissionDecisionReason"], \
+        "the hook runs before the commit, so it cannot judge what this push sends, even when HEAD is verified"
+    assert decision(push('git -c user.name=t commit -m x; git -C . push')) == "ask", "with git options too"
+    later = push('git push && git commit -m "next"')
+    assert "separate command" not in (later or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", ""), \
+        "a commit after the push changes nothing it sent; HEAD alone decides"
     assert push("git log --grep push") is None, "push as an argument is not a push"
     assert push("git push origin --delete old-branch") is None, "deleting a remote branch sends no code"
     assert push("git push", outside) is None, "another project is the isolation hook's business"
@@ -266,6 +273,10 @@ def check_stamp_ignores_cached_stats(base: Path) -> None:
     tick = time.time_ns() - 10 * 10**9
     os.utime(repository / "a.txt", ns=(tick, tick))  # older than the index Git writes next: not smudged
     subprocess.run(["git", "-C", str(repository), "add", "a.txt"], check=True)
+    # With core.filemode false (a Windows drive) the executable bit lives only in the index.
+    subprocess.run(["git", "-C", str(repository), "config", "core.filemode", "false"], check=True)
+    (repository / "run.sh").write_text("echo run\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "add", "--chmod=+x", "run.sh"], check=True)
     subprocess.run(["git", "-C", str(repository), "commit", "-q", "-m", "one"], check=True)
     (repository / "a.txt").write_text("two", encoding="utf-8")
     for path in (repository / "a.txt", repository / ".git" / "index"):
@@ -276,6 +287,7 @@ def check_stamp_ignores_cached_stats(base: Path) -> None:
     edited = subprocess.run(["git", "-C", str(repository), "hash-object", "a.txt"], capture_output=True, text=True).stdout.strip()
     stamped = verified.working_tree(repository)
     assert verified.git(repository, "rev-parse", f"{stamped}:a.txt") == edited, "the stamp hashes content, not cached stats"
+    assert verified.git(repository, "ls-tree", stamped, "run.sh").startswith("100755"), "modes come from the index, not the disk"
 
 
 def check_kit_layer(base: Path) -> None:

@@ -155,6 +155,7 @@ def pre_bash(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
 # Verify before push (docs/kit/decisions/0028-verify-before-push.md): what leaves the machine must be the
 # exact tree a passing ./cc verify tested (./cc check is enough for the CC's own repository).
 # Only git's own options may come before the subcommand, so `git log --grep push` is not a push.
+COMMIT = re.compile(r"\bgit(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+commit\b")
 PUSH = re.compile(r"\bgit(?P<options>(?:\s+(?:-[Cc]\s+\S+|--\S+))*)\s+push\b(?P<rest>[^;&|\n]*)|\bgh\s+pr\s+create\b")
 GIT_DIRECTORY = re.compile(r"-C\s+(['\"]?)([^\s'\"]+)\1")
 CD = re.compile(r"(?:^|&&|;)\s*cd\s+(['\"]?)([^\s'\";&|]+)\1")
@@ -173,6 +174,10 @@ def unverified_push(command: str, cwd: Path, root: Path = ROOT) -> str | None:
     match = PUSH.search(command)
     if not match or "--delete" in (match.group("rest") or ""):
         return None
+    if COMMIT.search(command[:match.start()]):
+        # The hook runs before the command, so it would judge the commit before this one (it let one through, 2026-10-28).
+        return ("This command commits and then pushes, so the hook cannot see the commit it would push. Commit first, "
+                "then push in a separate command, so the pushed tree can be checked against the passing runs.")
     repository = push_repository(command, match, cwd)
     try:
         top = Path(verified.git(repository, "rev-parse", "--show-toplevel")).resolve()

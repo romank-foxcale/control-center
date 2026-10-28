@@ -32,16 +32,17 @@ def git(repository: Path, *arguments: str, env: dict[str, str] | None = None) ->
 def working_tree(repository: Path) -> str:
     """The tree Nix evaluates in `repository`: every tracked file as it is on disk, committed or not.
 
-    Hashed from content into an empty index, never from Git's cached file stats: a copy of the index loses
-    Git's racy-clean timing and called a same-size edit in the same clock tick unchanged (flaky in CI, 2026-10-28).
+    The index's entries (paths and modes: with core.filemode false the disk has no executable bit) go into a new
+    index without their cached file stats, so `add --update` hashes every file's content. A copy of the index kept
+    the stats but lost Git's racy-clean timing, and called a same-size edit in the same clock tick unchanged (flaky
+    in CI, 2026-10-28).
     """
-    tracked = [path for path in git(repository, "ls-files", "-z").split("\0") if path]
-    present = "\0".join(path for path in tracked if os.path.lexists(repository / path))
+    entries = subprocess.run(["git", "-C", str(repository), "ls-files", "--stage", "-z"], check=True, capture_output=True).stdout
     with tempfile.TemporaryDirectory() as directory:
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(directory) / "index")}
-        if present:
-            subprocess.run(["git", "-C", str(repository), "add", "--force", "--pathspec-from-file=-", "--pathspec-file-nul"],
-                           input=present, check=True, capture_output=True, text=True, env=env)
+        subprocess.run(["git", "-C", str(repository), "update-index", "-z", "--index-info"], input=entries, check=True,
+                       capture_output=True, env=env)
+        git(repository, "add", "--update", env=env)
         return git(repository, "write-tree", env=env)
 
 
