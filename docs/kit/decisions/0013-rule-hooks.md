@@ -3,7 +3,7 @@ id: kit.decision.0013-rule-hooks
 title: Claude Code hooks enforce the hard rules early; the gates still decide
 status: accepted
 summary: The AGENTS.md hard rules that a tool call reveals are enforced by Claude Code hooks at the moment of the call, and every rule that leaves an artifact is also gated by ./cc check or ./cc verify, so other tools and missed hooks are still caught.
-verified_at: 2026-10-17
+verified_at: 2026-10-28
 evidence:
   - scripts/rule_hooks.py
   - scripts/rule_hooks_test.py
@@ -19,6 +19,7 @@ relations:
   - docs/kit/decisions/0017-kit-and-project-layers.md
   - docs/kit/decisions/0018-setup-starts-itself.md
   - docs/kit/decisions/0021-cc-check-in-ci.md
+  - docs/kit/decisions/0028-verify-before-push.md
 ---
 
 # Claude Code hooks enforce the hard rules early; the gates still decide
@@ -35,6 +36,7 @@ The hard rules in `AGENTS.md` were instruction text only. Agents break them when
 
   | Rule | Hook | Gate |
   | --- | --- | --- |
+  | Push only what passed ([0028](0028-verify-before-push.md)) | `ask` on `git push` and `gh pr create` when no passing `./cc verify` (for the CC, `./cc check`) stamped HEAD's tree | none: the stamp is local |
   | No AI credit in commits or PRs | deny `git commit`, `gh pr create/edit` with an AI `Co-Authored-By` or "Generated with" line | `./cc verify` scans branch commits in the CC and each feature worktree |
   | No direct build or test tools | `ask`: the user approves a diagnosis run | none: a command leaves no artifact |
   | Skills only in `.agents/skills` | deny edits under `.claude/skills` | `agent-configs` check |

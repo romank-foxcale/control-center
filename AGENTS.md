@@ -30,3 +30,5 @@ One note holds one durable fact, decision, hack or debt, with frontmatter `id`, 
 ## Done means verified
 
 A CC change is finished with `./cc check`. A project code change is finished only with `./cc verify` (or `./cc feature <feature> verify`), which also runs the gate of every target platform the catalog declares: never call code working on a platform whose gate did not pass. Without Nix, run `python3 scripts/validate-knowledge.py .` and say the Nix part was not verified.
+
+Never call a task done, commit it for review or push it before the changed thing has actually run: a gate passing proves only what the gate runs. When no gate runs the change (a service, a compose file, a script), add a check or app that does, or run it and say how. Before saying a tool is missing, check with a command. Push only the exact tree that passed; a hook asks when it did not. Report what was verified and what was not.

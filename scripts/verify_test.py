@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import verified  # noqa: E402
 import verify  # noqa: E402
 
 FAILURES: list[str] = []
@@ -65,6 +68,24 @@ def test_full_should_stream_every_line(root: Path) -> None:
     check("full streams all", "line 1\n" in output and "line 100\n" in output, output)
 
 
+def test_a_pass_should_stamp_the_cc_and_only_the_selected_worktrees(root: Path) -> None:
+    (root / "control-center.json").write_text(json.dumps({"layout": {"projectsRoot": ".", "worktrees": "worktrees"}}))
+    repositories = {name: {"worktree": f"worktrees/f/{name}_wt"} for name in ("api", "web")}
+    (root / "worktrees" / "f").mkdir(parents=True)
+    (root / "worktrees" / "f" / ".cc-worktree.json").write_text(json.dumps({"repositories": repositories}))
+    for path in (root, root / "worktrees" / "f" / "api_wt", root / "worktrees" / "f" / "web_wt"):
+        path.mkdir(exist_ok=True)
+        (path / "a.txt").write_text(path.name)
+        subprocess.run(["git", "init", "-q", str(path)], check=True)
+        subprocess.run(["git", "-C", str(path), "add", "a.txt"], check=True)
+    with contextlib.redirect_stderr(io.StringIO()):
+        verify.stamp_trees(root, "f", ["api"])
+    kinds = lambda path: (verified.lookup(root, verified.working_tree(path)) or {}).get("kinds")
+    check("cc stamped", kinds(root) == ["verify"], kinds(root))
+    check("selected worktree stamped", kinds(root / "worktrees" / "f" / "api_wt") == ["verify"])
+    check("other worktree not stamped", kinds(root / "worktrees" / "f" / "web_wt") is None)
+
+
 def main() -> int:
     os.environ.pop("CC_EVENTS", None)
     with tempfile.TemporaryDirectory() as temporary:
@@ -72,6 +93,8 @@ def main() -> int:
         test_a_failing_gate_should_print_only_its_tail_and_keep_the_full_log(root)
         test_a_passing_gate_should_print_one_line_without_its_output(root)
         test_full_should_stream_every_line(root)
+    with tempfile.TemporaryDirectory() as temporary:
+        test_a_pass_should_stamp_the_cc_and_only_the_selected_worktrees(Path(temporary))
     for failure in FAILURES:
         print(f"FAIL {failure}")
     print("verify tests passed" if not FAILURES else f"{len(FAILURES)} verify test(s) failed")

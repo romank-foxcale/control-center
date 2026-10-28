@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 
 import rule_hooks
+import verified
 from rule_hooks import ai_attribution, markdown_allowed, nix_bypass, post_edit, pre_bash, pre_edit, stop
 
 SCRIPT = Path(__file__).resolve().parent / "rule_hooks.py"
@@ -203,6 +204,55 @@ def check_attributed_commits(base: Path) -> None:
     assert len(found) == 1 and "GPT-5" in found[0], found
 
 
+def check_verify_before_push(base: Path) -> None:
+    """A push asks unless a passing run stamped the exact tree of HEAD; the CC accepts ./cc check, a project needs verify."""
+    cc = base / "push" / "alpha_CC"
+    worktree = cc / "worktrees" / "f" / "api_wt"
+    outside = base / "push" / "beta"
+
+    def commit(repository: Path, name: str, text: str) -> None:
+        (repository / name).write_text(text, encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "add", name], check=True)
+        subprocess.run(["git", "-C", str(repository), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", text],
+                       check=True)
+
+    for repository in (cc, worktree, outside):
+        repository.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repository)], check=True)
+        commit(repository, "a.txt", "one")
+
+    def push(command: str, cwd: Path = cc) -> dict | None:
+        return pre_bash({"tool_input": {"command": command}, "cwd": str(cwd)}, cc)
+
+    asked = push("git push origin main")
+    assert decision(asked) == "ask" and "./cc check or ./cc verify" in asked["hookSpecificOutput"]["permissionDecisionReason"], asked
+    assert decision(push('gh pr create --title T --body B')) == "ask", "opening a PR pushes too"
+    verified.record(cc, cc, "check")
+    assert push("git push origin main") is None, "./cc check passed on this tree"
+
+    (cc / "a.txt").write_text("two", encoding="utf-8")
+    (cc / "untracked.txt").write_text("Nix never sees it", encoding="utf-8")
+    verified.record(cc, cc, "check")
+    commit(cc, "a.txt", "two")
+    assert push("git push") is None, "a run on uncommitted changes covers the commit made from them"
+    commit(cc, "a.txt", "three")
+    assert decision(push("git push")) == "ask", "an edit after the run is not verified"
+
+    assert decision(push(f"git -C {worktree} push")) == "ask", "git -C names the repository"
+    verified.record(cc, worktree, "check")
+    asked = push(f"cd {worktree} && git push -u origin f")
+    assert decision(asked) == "ask" and "feature <feature> verify" in asked["hookSpecificOutput"]["permissionDecisionReason"], \
+        "a project repo needs verify: ./cc check runs no target gate"
+    verified.record(cc, worktree, "verify")
+    assert push("git push -u origin f", worktree) is None
+    assert verified.lookup(cc, verified.commit_tree(worktree))["kinds"] == ["check", "verify"], "kinds accumulate"
+
+    assert push("git log --grep push") is None, "push as an argument is not a push"
+    assert push("git push origin --delete old-branch") is None, "deleting a remote branch sends no code"
+    assert push("git push", outside) is None, "another project is the isolation hook's business"
+    assert push("git push", base) is None, "not a Git repository"
+
+
 def check_kit_layer(base: Path) -> None:
     """In a CC, docs/kit belongs to the kit: an edit asks first and points to an override decision. The template edits it."""
     def edit_at(root: Path, path: str, tool: str = "Edit"):
@@ -247,6 +297,7 @@ def main() -> int:
         check_attribution(base)
         check_edits(base / "cc")
         check_attributed_commits(base)
+        check_verify_before_push(base)
         check_isolation(base)
         check_reference_repos(base)
         check_kit_layer(base)
