@@ -82,7 +82,8 @@
                 ${pkgs.python3}/bin/python ${self}/scripts/trello_test.py
                 touch "$out"
               '';
-              events = pkgs.runCommand "control-center-events" { } ''
+              events = pkgs.runCommand "control-center-events" { nativeBuildInputs = [ pkgs.git ]; } ''
+                export HOME=$TMPDIR
                 ${pkgs.python3}/bin/python ${self}/scripts/events_test.py
                 ${pkgs.python3}/bin/python -B ${self}/scripts/verify_test.py
                 touch "$out"

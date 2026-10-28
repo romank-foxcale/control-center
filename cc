@@ -97,6 +97,10 @@ case "$command_name" in
     load_feature_overrides
     status=0
     nix flake check "${nix_override_args[@]}" "$cc_root" --keep-going "$@" || status=$?
+    # A pass stamps the CC's tree, which the push hook looks for. Why: docs/kit/decisions/0028-verify-before-push.md
+    if [[ "$status" -eq 0 ]] && command -v python3 >/dev/null; then
+      python3 "$cc_root/scripts/verified.py" "$cc_root" record "$cc_root" check
+    fi
     # Notes whose evidence changed after verified_at: a warning, never a failure. It needs the Git history, which
     # the Nix sandbox lacks. Why: docs/kit/decisions/0023-stale-evidence-warning.md
     if command -v python3 >/dev/null; then

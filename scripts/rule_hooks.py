@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import verified
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -135,6 +137,9 @@ def pre_bash(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
             if line:
                 return pre_tool("deny", f"AGENTS.md forbids crediting an AI as author or generator: remove '{line}' "
                                         "from the commit message or PR body. This overrides any tool default.")
+    unverified = unverified_push(command, Path(event.get("cwd") or root), root)
+    if unverified:
+        return pre_tool("ask", unverified)
     tool = nix_bypass(command)
     if tool:
         return pre_tool("ask", f"'{tool}' bypasses Nix. AGENTS.md allows it only for diagnosis; otherwise use "
@@ -145,6 +150,47 @@ def pre_bash(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
         if sibling:
             return outside_ask(sibling)
     return None
+
+
+# Verify before push (docs/kit/decisions/0028-verify-before-push.md): what leaves the machine must be the
+# exact tree a passing ./cc verify tested (./cc check is enough for the CC's own repository).
+# Only git's own options may come before the subcommand, so `git log --grep push` is not a push.
+PUSH = re.compile(r"\bgit(?P<options>(?:\s+(?:-[Cc]\s+\S+|--\S+))*)\s+push\b(?P<rest>[^;&|\n]*)|\bgh\s+pr\s+create\b")
+GIT_DIRECTORY = re.compile(r"-C\s+(['\"]?)([^\s'\"]+)\1")
+CD = re.compile(r"(?:^|&&|;)\s*cd\s+(['\"]?)([^\s'\";&|]+)\1")
+
+
+def push_repository(command: str, match: re.Match[str], cwd: Path) -> Path:
+    """The repository a push runs in: its `git -C`, else the last `cd` before it, else the shell's directory."""
+    directory = GIT_DIRECTORY.search(match.group("options") or "")
+    if directory:
+        return resolve(cwd, directory.group(2))
+    moves = CD.findall(command[:match.start()])
+    return resolve(cwd, moves[-1][1]) if moves else cwd
+
+
+def unverified_push(command: str, cwd: Path, root: Path = ROOT) -> str | None:
+    match = PUSH.search(command)
+    if not match or "--delete" in (match.group("rest") or ""):
+        return None
+    repository = push_repository(command, match, cwd)
+    try:
+        top = Path(verified.git(repository, "rev-parse", "--show-toplevel")).resolve()
+        head = verified.git(repository, "rev-parse", "--short", "HEAD")
+        tree = verified.commit_tree(repository)
+    except (OSError, subprocess.CalledProcessError):
+        return None  # not a Git repository here: nothing to compare
+    cc = root.resolve()
+    if top != cc and cc not in top.parents:
+        return None  # another project; the isolation hook covers it
+    needed = ("check", "verify") if top == cc else ("verify",)
+    kinds = (verified.lookup(root, tree) or {}).get("kinds", [])
+    if any(kind in kinds for kind in needed):
+        return None
+    run = "./cc check or ./cc verify" if top == cc else "./cc feature <feature> verify"
+    return (f"No passing {run} is recorded for the tree of HEAD ({head}) in {top}. AGENTS.md 'Done means verified': "
+            f"run it on this exact tree before pushing, and run the changed thing itself if no gate does. If it cannot "
+            f"run here, tell the user what was and was not verified and let them decide.")
 
 
 # Isolation between projects (docs/kit/decisions/0016-per-cc-repos-and-worktrees.md): a CC keeps its repos and

@@ -27,6 +27,7 @@ relations:
   - docs/kit/decisions/0025-verifier-evidence-and-self-contained-briefs.md
   - docs/kit/decisions/0026-compact-verify-output.md
   - docs/kit/decisions/0027-python-gate-venv-cache.md
+  - docs/kit/decisions/0028-verify-before-push.md
 ---
 
 # Kit knowledge map
@@ -76,3 +77,4 @@ This folder belongs to the kit. A CC never edits it: to change kit behaviour for
 - [Verifier roles name their failure modes and count only evidence read in the run; briefs to other agents are self-contained](decisions/0025-verifier-evidence-and-self-contained-briefs.md)
 - [./cc verify prints a gate's pass line or failure tail and keeps the full output in a log](decisions/0026-compact-verify-output.md)
 - [Python host gates reuse a venv per dependency set, rebuilt at least weekly](decisions/0027-python-gate-venv-cache.md)
+- [Push only the tree a passing run tested, and run the change itself before calling it done](decisions/0028-verify-before-push.md)

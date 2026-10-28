@@ -16,6 +16,7 @@ from typing import Any
 
 import events
 import repositories as repositories_catalog
+import verified
 from rule_hooks import attributed_commits
 
 
@@ -189,7 +190,21 @@ def run_verify(root: Path, args: argparse.Namespace, live: Gates) -> int:
     print("\nREPO\tGATE\tRESULT")
     for row in results:
         print("\t".join(row))
-    return 0 if all(result in {"pass", WARN} for _, _, result in results) else 1
+    if not all(result in {"pass", WARN} for _, _, result in results):
+        return 1
+    stamp_trees(root, feature, [repository["id"] for repository in repositories])
+    return 0
+
+
+def stamp_trees(root: Path, feature: str | None, identifiers: list[str]) -> None:
+    """Record the trees this passing run tested, for the push hook (docs/kit/decisions/0028-verify-before-push.md)."""
+    worktrees = feature_worktrees(root, feature)
+    paths = [root] + [Path(worktrees[identifier]["CC_WORKTREE"]) for identifier in identifiers if identifier in worktrees]
+    for path in paths:
+        try:
+            verified.record(root, path, "verify")
+        except (OSError, subprocess.CalledProcessError) as error:
+            print(f"warning: no verify stamp for {path}: {error}", file=sys.stderr)
 
 
 def run_quality(
