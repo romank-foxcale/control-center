@@ -11,6 +11,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -75,7 +76,9 @@ class Ticker(threading.Thread):
                 print(f"... still {state.get('phase', state.get('stage'))}: {busy} ({waited})", flush=True)
 
     def __enter__(self) -> "Ticker":
-        self.watched.events.emit("start", f"{self.watched.state['council']} on {self.watched.state['feature']}/{self.watched.state['repository']}", pid=os.getpid())
+        state = self.watched.state
+        scope = f"{state['feature']}/{state['repository']}" if state["feature"] else state["repository"] or "the CC"
+        self.watched.events.emit("start", f"{state['council']} on {scope}", pid=os.getpid())
         self.watchdog = events.Watchdog(self.watched.events, self.watched.activity)
         self.watchdog.start()
         self.start()
@@ -115,6 +118,16 @@ def skill_text(root: Path, name: str) -> str:
 
 def role_prompt(root: Path, role: dict[str, Any], state: dict[str, Any], body: str) -> str:
     skills = "\n\n".join(skill_text(root, skill) for skill in role.get("skills", []))
+    if state["kind"] == "risk":
+        # A risk audit comes before any code: it reads the CC's notes and the repositories as they are.
+        repositories = "".join(f"\n- {identifier}: {path}" for identifier, path in state.get("repositories", {}).items())
+        context = (
+            f"Council: {state['council']} (risk). The current directory is the Control Center root: its knowledge notes "
+            f"start at docs/index.md, its catalog of repositories is catalog/repositories/. Targets: "
+            f"{', '.join(state['targets']) or 'unknown'}, stack: {', '.join(state.get('stack', [])) or 'unknown'}. "
+            f"Repositories in scope, relative to this directory:{repositories or ' none named; find them in the catalog'}"
+        )
+        return f"{skills}\n\n# Context\n\n{context}\n\n{body}"
     context = (
         f"Council: {state['council']} ({state['kind']}). Feature: {state['feature']}. "
         f"Repository: {state['repository']}, targets: {', '.join(state['targets']) or 'unknown'}, "
@@ -234,7 +247,7 @@ class Run:
         """Record what one agent's output gives to the next: the conversation between agents."""
         self.events.emit("handoff", text)
 
-    def call(self, identifier: str, body: str, name: str) -> str:
+    def call(self, identifier: str, body: str, name: str, shared: Path | None = None) -> str:
         role = self.role(identifier)
         say(f"   {name}: {identifier} ({role['provider']} {role['model']}, {role['access']})")
         self.events.emit("agent", f"{identifier} ({role['provider']} {role['model']}) started {name}", who=identifier)
@@ -252,6 +265,7 @@ class Run:
                 self.worktree,
                 self.directory / "logs" / f"{name}.log",
                 on_say=lambda text: self.events.emit("say", f"{identifier}: {text}", who=identifier),
+                **({"shared": shared} if shared and role["provider"] == "cursor" else {}),
             )
         except providers.ProviderError as error:
             self.events.emit("error", str(error), who=identifier)
@@ -486,6 +500,44 @@ class Run:
                     "the judge cannot overrule it: read security.md and " + ", ".join(f"review-{role}.md" for role in flagged))
         return ""
 
+    def assess(self, council: dict[str, Any]) -> None:
+        """Risk council: independent pre-mortems, then the judge's verified register. Nothing is written but risk.md."""
+        task = f"# Planned change\n\n{self.state['task']}"
+        roles = [*council["assessors"], council["judge"]]
+        shared, before = None, {}
+        if any(self.role(identifier)["provider"] == "cursor" for identifier in roles):
+            # Cursor reads a snapshot; the clones and worktrees in scope are git-ignored in the CC, so add them.
+            include = [self.root / path for path in self.state.get("repositories", {}).values()]
+            shared, before = providers.snapshot(self.root, include)
+        try:
+            self.step("assess")
+            with concurrent.futures.ThreadPoolExecutor(len(council["assessors"])) as pool:
+                futures = {
+                    identifier: pool.submit(self.call, identifier, task, f"assessment-{identifier}", shared)
+                    for identifier in council["assessors"]
+                }
+                assessments = {identifier: future.result() for identifier, future in futures.items()}
+            order = list(assessments)
+            random.SystemRandom().shuffle(order)
+            labels = {chr(ord("A") + index): identifier for index, identifier in enumerate(order)}
+            self.save(labels=labels)
+            anonymous = "\n\n".join(f"# Assessment {label}\n\n{assessments[identifier]}" for label, identifier in labels.items())
+            self.step("risk summary")
+            self.handoff(f"{', '.join(assessments)} → {council['judge']}: assessments as anonymous {', '.join(labels)}")
+            summary = self.call(council["judge"], f"{task}\n\n{anonymous}", "risk", shared)
+            if shared and providers.fingerprint(shared) != before:
+                raise providers.ProviderError("a cursor role changed its read-only snapshot; the assessments are void")
+        finally:
+            if shared:
+                shutil.rmtree(shared, ignore_errors=True)
+        verdict = re.match(r"\s*VERDICT:\s*(GO-WITH-CONDITIONS|NO-GO|GO)\b", summary)
+        say("Assessment authors (hidden from the judge): " + ", ".join(f"{label}: {identifier}" for label, identifier in labels.items()))
+        if not verdict:
+            self.finish("failed", "the judge reply has no VERDICT line; see risk.md")
+            return
+        self.save(decision=verdict.group(1))
+        self.finish("done", f"verdict {verdict.group(1)}; read risk.md before planning or implementing")
+
     def finish(self, stage: str, summary: str) -> None:
         self.save(stage=stage, summary=summary, finishedAt=now())
         self.events.emit(events.END, f"{stage}: {summary}", ok=stage == "done", stage=stage)
@@ -518,8 +570,14 @@ def run_tokens(state: dict[str, Any]) -> str:
     return f"at least {text}; {missing} did not report tokens" if missing else text
 
 
+def run_states(root: Path, identifier: str = "*") -> list[Path]:
+    """Council runs on features, and risk runs, which need no feature and live in the CC's own run folder."""
+    return [*worktrees_root(root).glob(f"*/.cc-runs/{identifier}/state.json"),
+            *(root / ".cc-local" / "runs").glob(f"{identifier}/state.json")]
+
+
 def find_run(root: Path, identifier: str) -> Run:
-    matches = list(worktrees_root(root).glob(f"*/.cc-runs/{identifier}/state.json"))
+    matches = run_states(root, identifier)
     if len(matches) != 1:
         raise ValueError(f"run not found: {identifier}")
     return Run(root, matches[0].parent)
@@ -538,7 +596,69 @@ def pipeline_council(root: Path, identifier: str) -> dict[str, Any]:
     if council.get("kind") == "threads":
         raise ValueError(f"council {identifier} judges review threads: run ./cc prs judge <repo> <n>; "
                          "change its roles with ./cc council set-role")
+    if council.get("kind") == "risk":
+        raise ValueError(f"council {identifier} audits a planned change: run ./cc council risk --task <change>; "
+                         "change its roles with ./cc council set-role")
     return council
+
+
+def command_risk(root: Path, args: argparse.Namespace) -> None:
+    council = council_config(root, args.council)
+    if council.get("kind") != "risk":
+        raise ValueError(f"council {args.council} is a {council.get('kind')} council, not a risk council")
+    task = Path(args.task_file).read_text(encoding="utf-8") if args.task_file else args.task
+    if not task or not task.strip():
+        raise ValueError("describe the planned change with --task or --task-file")
+    layout = load_json(root / "control-center.json")["layout"]
+    projects = (root / layout["projectsRoot"]).resolve()
+    # With a feature, its worktrees (the change as far as it got); otherwise the base clones of --repo.
+    if args.feature:
+        manifest = load_json(worktrees_root(root) / args.feature / ".cc-worktree.json").get("repositories", {})
+        missing = [identifier for identifier in args.repo if identifier not in manifest]
+        if missing:
+            raise ValueError(f"not in the feature {args.feature}: {', '.join(missing)}")
+        paths = {identifier: entry["worktree"] for identifier, entry in manifest.items() if not args.repo or identifier in args.repo}
+    else:
+        kinds = {identifier: load_json(root / "catalog" / "repositories" / f"{identifier}.json").get("kind", "project")
+                 for identifier in args.repo}
+        paths = {identifier: f"{layout['repositories']}/{kind}/{identifier}" for identifier, kind in kinds.items()}
+    repositories = {}
+    for identifier, path in paths.items():
+        absolute = (projects / path).resolve()
+        if not absolute.is_dir():
+            raise ValueError(f"{identifier} has no checkout at {absolute}; clone it with ./cc repo or name a feature")
+        repositories[identifier] = absolute.relative_to(root.resolve()).as_posix()
+    for slot in [*council["assessors"], council["judge"]]:
+        role = load_json(root / "catalog" / "agents" / f"{slot}.json")
+        available, detail = providers.login_status(role["provider"])
+        if not available:
+            raise ValueError(f"role {slot} needs {role['provider']}: {detail}")
+    entries = [load_json(root / "catalog" / "repositories" / f"{identifier}.json") for identifier in repositories]
+    identifier = f"{datetime.datetime.now():%Y%m%d-%H%M%S}-{council['id']}"
+    directory = root / ".cc-local" / "runs" / identifier
+    directory.mkdir(parents=True)
+    write_json(
+        directory / "state.json",
+        {
+            "id": identifier,
+            "council": council["id"],
+            "kind": "risk",
+            "feature": args.feature or "",
+            "repository": ", ".join(repositories),
+            "repositories": repositories,
+            "worktree": str(root),
+            "targets": sorted({target for entry in entries for target in entry.get("targets", [])}),
+            "stack": sorted({language for entry in entries for language in entry.get("stack", [])}),
+            "task": task.strip(),
+            "stage": "assessing",
+            "plan": progress.plan("risk", council),
+            "startedAt": now(),
+        },
+    )
+    say(f"run {identifier}: risk council on {', '.join(repositories) or 'the CC'}")
+    run = Run(root, directory)
+    with Ticker(run):
+        run.assess(council)
 
 
 def command_run(root: Path, args: argparse.Namespace) -> None:
@@ -641,9 +761,9 @@ def command_status(root: Path, args: argparse.Namespace) -> None:
                     say(f"    {line[:160]}")
         return
     rows = []
-    for path in sorted(worktrees_root(root).glob("*/.cc-runs/*/state.json")):
+    for path in sorted(run_states(root), key=lambda path: path.parent.name):
         state = load_json(path)
-        rows.append(f"{state['id']}\t{state['feature']}/{state['repository']}\t{state['stage']}\t{progress.bar(state)}\t"
+        rows.append(f"{state['id']}\t{state['feature'] or '-'}/{state['repository'] or '-'}\t{state['stage']}\t{progress.bar(state)}\t"
                     f"{run_tokens(state).split(' (')[0]}")
     say("RUN\tFEATURE/REPO\tSTAGE\tPROGRESS\tTOKENS\n" + "\n".join(rows) if rows else "no council runs")
 
@@ -712,6 +832,15 @@ def parser() -> argparse.ArgumentParser:
     task.add_argument("--task")
     task.add_argument("--task-file")
     run.set_defaults(handler=command_run)
+
+    risk = subparsers.add_parser("risk", help="audit the risks of a planned change before planning or implementing it")
+    risk.add_argument("--council", default="risk", help="risk council id in catalog/councils")
+    risk.add_argument("--repo", action="append", default=[], help="repository in scope; repeat for several")
+    risk.add_argument("--feature", help="read the feature's worktrees instead of the base clones")
+    risk_task = risk.add_mutually_exclusive_group(required=True)
+    risk_task.add_argument("--task")
+    risk_task.add_argument("--task-file")
+    risk.set_defaults(handler=command_risk)
 
     approve = subparsers.add_parser("approve", help="approve the verdict and let the writer implement it")
     approve.add_argument("run")

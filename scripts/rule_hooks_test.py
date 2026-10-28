@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import rule_hooks
@@ -247,10 +249,45 @@ def check_verify_before_push(base: Path) -> None:
     assert push("git push -u origin f", worktree) is None
     assert verified.lookup(cc, verified.commit_tree(worktree))["kinds"] == ["check", "verify"], "kinds accumulate"
 
+    asked = push('git commit -q -m "Fix" && git push')
+    assert decision(asked) == "ask" and "separate command" in asked["hookSpecificOutput"]["permissionDecisionReason"], \
+        "the hook runs before the commit, so it cannot judge what this push sends, even when HEAD is verified"
+    assert decision(push('git -c user.name=t commit -m x; git -C . push')) == "ask", "with git options too"
+    later = push('git push && git commit -m "next"')
+    assert "separate command" not in (later or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", ""), \
+        "a commit after the push changes nothing it sent; HEAD alone decides"
     assert push("git log --grep push") is None, "push as an argument is not a push"
     assert push("git push origin --delete old-branch") is None, "deleting a remote branch sends no code"
     assert push("git push", outside) is None, "another project is the isolation hook's business"
     assert push("git push", base) is None, "not a Git repository"
+
+
+def check_stamp_ignores_cached_stats(base: Path) -> None:
+    """A same-size edit in the clock tick of an index entry that Git did not smudge: Git itself rehashes it because
+    the entry is racily clean, so the stamp must see the edit too. A copied index lost that (flaky in CI, 2026-10-28)."""
+    repository = base / "racy"
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    for key, value in (("core.checkStat", "minimal"), ("core.trustctime", "false"), ("user.name", "t"), ("user.email", "t@t")):
+        subprocess.run(["git", "-C", str(repository), "config", key, value], check=True)
+    (repository / "a.txt").write_text("one", encoding="utf-8")
+    tick = time.time_ns() - 10 * 10**9
+    os.utime(repository / "a.txt", ns=(tick, tick))  # older than the index Git writes next: not smudged
+    subprocess.run(["git", "-C", str(repository), "add", "a.txt"], check=True)
+    # With core.filemode false (a Windows drive) the executable bit lives only in the index.
+    subprocess.run(["git", "-C", str(repository), "config", "core.filemode", "false"], check=True)
+    (repository / "run.sh").write_text("echo run\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "add", "--chmod=+x", "run.sh"], check=True)
+    subprocess.run(["git", "-C", str(repository), "commit", "-q", "-m", "one"], check=True)
+    (repository / "a.txt").write_text("two", encoding="utf-8")
+    for path in (repository / "a.txt", repository / ".git" / "index"):
+        os.utime(path, ns=(tick, tick))
+    status = subprocess.run(["git", "-C", str(repository), "status", "--porcelain"], capture_output=True, text=True,
+                            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"}).stdout.strip()
+    assert status == "M a.txt", f"the setup must be one Git itself sees as edited: {status!r}"
+    edited = subprocess.run(["git", "-C", str(repository), "hash-object", "a.txt"], capture_output=True, text=True).stdout.strip()
+    stamped = verified.working_tree(repository)
+    assert verified.git(repository, "rev-parse", f"{stamped}:a.txt") == edited, "the stamp hashes content, not cached stats"
+    assert verified.git(repository, "ls-tree", stamped, "run.sh").startswith("100755"), "modes come from the index, not the disk"
 
 
 def check_kit_layer(base: Path) -> None:
@@ -298,6 +335,7 @@ def main() -> int:
         check_edits(base / "cc")
         check_attributed_commits(base)
         check_verify_before_push(base)
+        check_stamp_ignores_cached_stats(base)
         check_isolation(base)
         check_reference_repos(base)
         check_kit_layer(base)

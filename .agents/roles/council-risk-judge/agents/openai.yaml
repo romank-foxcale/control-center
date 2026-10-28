@@ -1,0 +1,6 @@
+interface:
+  display_name: "Council Risk Judge"
+  short_description: "Role for the judge in a risk council run"
+  default_prompt: "Run ./cc council risk; this role skill is loaded by the runner."
+policy:
+  allow_implicit_invocation: false

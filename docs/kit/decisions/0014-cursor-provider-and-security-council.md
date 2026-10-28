@@ -18,6 +18,7 @@ relations:
   - docs/index.md
   - docs/kit/decisions/0007-agent-councils.md
   - docs/kit/decisions/0015-thread-sceptics.md
+  - docs/kit/decisions/0029-risk-council.md
 ---
 
 # Cursor is a read-only provider confined by its permission config, and security review is a three-model council
@@ -29,7 +30,7 @@ The user wants Grok models, available through a Cursor subscription, as the judg
 ## Decision
 
 - Provider `cursor` runs `cursor-agent --print --trust --workspace <snapshot> --output-format stream-json --model <model>` without `--force`, prompt on stdin.
-- `<snapshot>` is a fresh temporary copy of what Git would commit in the worktree, plus a `.cursor/cli.json` that allows `Read(**)` and denies `Write(**)` and `Shell(*)`, replacing any project copy. Probed on 2026-10-08 with `grok-4.7-high`: the model called edit and shell tools, and the CLI refused each with "Blocked by permissions configuration". The snapshot is fingerprinted before the call; any change fails the call, and the snapshot is deleted. A thread judge run instead shares one snapshot across its calls and checks it after each phase ([0015](0015-thread-sceptics.md)).
+- `<snapshot>` is a fresh temporary copy of what Git would commit in the worktree, plus a `.cursor/cli.json` that allows `Read(**)` and denies `Write(**)` and `Shell(*)`, replacing any project copy. Probed on 2026-10-08 with `grok-4.7-high`: the model called edit and shell tools, and the CLI refused each with "Blocked by permissions configuration". The snapshot is fingerprinted before the call; any change fails the call, and the snapshot is deleted. A thread judge run instead shares one snapshot across its calls and checks it after each phase ([0015](0015-thread-sceptics.md)). The copy leaves out `.claude/settings*.json`: Cursor runs a folder's Claude Code hooks too, and in the first risk council run a CC's hooks ran Python in the snapshot, which then failed its fingerprint ([0029](0029-risk-council.md)).
 - Cursor roles can only be `read-only`; validation refuses `write-worktree`. The reply is what the agent said after its last tool call, because Cursor's result joins every message.
 - A council's `security` is a list of read-only reviewers (one role id still works). Several reviewers run in parallel; the judge receives their reviews as anonymous `Review A`, `Review B`, ..., verifies each finding against the code and writes `security.md`. Each review is kept as `review-<role>.md`.
 - The run is `blocked-security` when the summary is `high` or unreadable, or when any reviewer is. The judge may explain why it does not confirm a reviewer's high finding, but only the user can overrule it.

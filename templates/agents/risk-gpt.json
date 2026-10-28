@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "risk-gpt",
+  "purpose": "Audits a planned change for risks, with web search for upstream issues",
+  "provider": "codex",
+  "model": "gpt-6.1-sol",
+  "access": "read-only-web",
+  "skills": [
+    "council-risk-assess"
+  ]
+}

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Council Risk Assessor"
+  short_description: "Role for risk assessors in a risk council run"
+  default_prompt: "Run ./cc council risk; this role skill is loaded by the runner."
+policy:
+  allow_implicit_invocation: false

@@ -13,6 +13,7 @@ STEPS = {
     "coding": ["propose", "judge", "approval", "write", "verify", "security", "security summary"],
     "testing": ["propose", "judge", "approval", "write", "verify", "security", "security summary"],
     "debug": ["reproduce", "propose", "judge", "approval", "write test", "red check", "fix", "verify", "security", "security summary"],
+    "risk": ["assess", "risk summary"],
 }
 
 
