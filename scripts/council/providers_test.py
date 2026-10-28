@@ -79,6 +79,9 @@ def main() -> int:
         (worktree / "app.py").write_text("print('app')\n")
         (worktree / ".cursor").mkdir()
         (worktree / ".cursor" / "cli.json").write_text('{"permissions": {"allow": ["Write(**)"]}}')
+        # Cursor also runs a folder's Claude Code hooks, so the snapshot leaves the Claude settings out.
+        (worktree / ".claude").mkdir()
+        (worktree / ".claude" / "settings.json").write_text('{"hooks": {"PreToolUse": []}}')
         subprocess.run([*git, "add", "-A"], check=True)
         subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
         (worktree / "app.py").write_text("print('changed by the writer')\n")  # the diff under review
@@ -116,6 +119,15 @@ def main() -> int:
             providers.run(role, "Judge.", worktree, log, shared=shared)
             assert Path(json.loads(seen.read_text())["cwd"]) == shared, "the call runs in the shared snapshot"
         assert shared.exists() and providers.fingerprint(shared) == before, "the caller owns the snapshot; no write"
+        # A risk run reads the CC with its git-ignored clones: they are copied in at the same place.
+        clone = worktree / "build" / "api"
+        clone.mkdir()
+        subprocess.run(["git", "init", "-q", str(clone)], check=True)
+        (clone / "server.py").write_text("serve()\n")
+        with_clone, _ = providers.snapshot(worktree, [clone])
+        assert (with_clone / "build" / "api" / "server.py").read_text() == "serve()\n", "the clone is in the snapshot"
+        assert not (with_clone / "build" / "huge.bin").exists(), "the rest of the ignored folder is not"
+        shutil.rmtree(with_clone)
         os.environ["FAKE_CURSOR_ACT"] = "write"
         providers.run(role, "Judge.", worktree, log, shared=shared)
         assert providers.fingerprint(shared) != before, "a write in the shared snapshot shows in its fingerprint"
@@ -137,6 +149,27 @@ def main() -> int:
         ], log.read_text()
         assert providers.usage(log) is None, "a call stopped before its result has no usage, not zero"
         assert providers.max_tool_calls(role) == providers.DEFAULT_MAX_TOOL_CALLS
+
+    # read-only-web: web search and fetch on top of reading, and nothing else; plain read-only gets no web.
+    # Claude's dontAsk mode denies WebSearch unless it is also allowed (checked with the real CLI, 2026-10).
+    claude = {"id": "risk", "provider": "claude", "model": "m", "access": "read-only-web"}
+    argv = providers.command(claude, Path("."), Path("last.txt"))
+    tools = argv[argv.index("--tools") + 1:argv.index("--allowedTools")]
+    assert tools == ["Read", "Grep", "Glob", "WebSearch", "WebFetch"], argv
+    assert argv[argv.index("--allowedTools") + 1:] == ["WebSearch", "WebFetch"], argv
+    assert argv[argv.index("--permission-mode") + 1] == "dontAsk", argv
+    assert argv[argv.index("--setting-sources") + 1] == "user", "the folder's project settings stay out"
+    assert json.loads(argv[argv.index("--settings") + 1]) == {"disableAllHooks": True}, "hooks never answer for a role"
+    plain = providers.command({**claude, "access": "read-only"}, Path("."), Path("last.txt"))
+    assert "--allowedTools" not in plain and "WebSearch" not in plain, plain
+    codex = providers.command({**claude, "provider": "codex"}, Path("."), Path("last.txt"))
+    assert codex[codex.index("--sandbox") + 1] == "read-only" and 'web_search="live"' in codex, codex
+    assert 'web_search="live"' not in providers.command({**claude, "provider": "codex", "access": "read-only"}, Path("."), Path("l"))
+    try:
+        providers.command({**claude, "provider": "cursor"}, Path("."), Path("last.txt"))
+        raise AssertionError("cursor has no web access level")
+    except providers.ProviderError:
+        pass
 
     # Codex edits and searches count as tool calls, like its commands.
     change = json.dumps({"type": "item.completed", "item": {"type": "file_change", "changes": [{"path": "a.py"}, {"path": "b.py"}]}})

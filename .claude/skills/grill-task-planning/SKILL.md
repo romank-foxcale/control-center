@@ -13,6 +13,8 @@ Build a provable model: outcome; non-goals; current behavior/evidence; affected 
 
 Do not confuse the requested implementation with the outcome. Test the proposed solution against counterexamples and compare it with at least one real alternative.
 
+When the change replaces a component or library, or changes a runtime, data format, data or deployment, offer a risk audit (`cc-risk`) before agreeing the plan, unless one already ran for it. Carry its register into the plan: each confirmed or assumed risk becomes a failure mode, each spike a work package that comes first, each check a completion check.
+
 ## Plan lifecycle
 
 If the plan is needed across sessions or agents, create it with `./cc plan create <task-id> --title <outcome>` in `plans/active/`. Otherwise keep the plan in the conversation.

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "risk",
+  "kind": "risk",
+  "purpose": "Independent models audit a planned change before it is planned or built; an anonymous judge verifies and merges their risks into one register",
+  "assessors": [
+    "risk-claude",
+    "risk-gpt"
+  ],
+  "judge": "risk-judge"
+}

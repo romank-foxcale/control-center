@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "risk-judge",
+  "purpose": "Verifies anonymous risk assessments and merges them into one ranked register",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "access": "read-only-web",
+  "skills": [
+    "council-risk-judge"
+  ]
+}

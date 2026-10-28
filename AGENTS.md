@@ -4,7 +4,7 @@ This repository is a Control Center (CC): the map and executable control plane f
 
 ## Setup and onboarding
 
-While `control-center.json` has status `discovery` or `adapting`, the CC is not set up: unless the user asks for something else, open with the setup interview (or offer to continue it) using `grill-cc-bootstrap`, in plain words for someone who does not know how a CC works. The same skill creates or migrates a CC (`BOOTSTRAP.md`) and onboards a project repo added later: after `./cc repo add`, continue into its onboarding unless the user wants only the catalog entry. Complex tasks are planned with `grill-task-planning`.
+While `control-center.json` has status `discovery` or `adapting`, the CC is not set up: unless the user asks for something else, open with the setup interview (or offer to continue it) using `grill-cc-bootstrap`, in plain words for someone who does not know how a CC works. The same skill creates or migrates a CC (`BOOTSTRAP.md`) and onboards a project repo added later: after `./cc repo add`, continue into its onboarding unless the user wants only the catalog entry. Complex tasks are planned with `grill-task-planning`; a change to architecture, dependencies, runtime, data or deployment gets a risk audit (`cc-risk`) first, never a list of risks from memory.
 
 ## Layout
 

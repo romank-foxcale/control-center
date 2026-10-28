@@ -217,6 +217,12 @@ A testing council works the same way: both models write tests, the judge merges 
 
 A debug council finds and fixes a bug: `./cc council run debug --feature my-feature --task "<exact symptom>"`. The CC first runs verify and hands its output to both models; each diagnoses the root cause with evidence; the judge picks the best-evidenced one; after your approval the writer adds a reproduction test that must fail, and only then fixes the cause. After three failed fixes it stops and asks you to rethink the design.
 
+A risk council audits a change before anyone plans or builds it:
+
+> What could go wrong if we switch ai from TEI to PyTorch for embeddings?
+
+The agent runs `./cc council risk --repo ai --task "<the change and its reason>"`. It needs no feature. Claude and GPT each imagine the change shipped and failed, and write how: the errors it would show, incompatibilities, performance, data, rollback. Every risk cites the code, a note or a web source, or is marked as an assumption. A judge checks the claims, without knowing who made them, and writes one ranked register to `.cc-local/runs/<run>/risk.md`, with experiments to run first and a verdict: GO, GO-WITH-CONDITIONS or NO-GO. Planning then turns the register into the plan's checks. The agent offers this on its own before a change to architecture, dependencies, runtime, data or deployment.
+
 Which model plays which role is one field per file in `catalog/agents/` (for example `"model": "claude-opus-5-5"` in `writer.json`; an alias such as `opus` works but follows the newest model, so `./cc check` warns about it); `catalog/councils/` sets the roles, the approval pause and the retry limit. Change them with `/cc-settings` in your session, in `./cc settings` (on Agents, select a role, press `e` and pick a model from the list), or with `./cc council set-role` and `./cc council set`. Run files are kept in `worktrees/<feature>/.cc-runs/` inside the CC.
 
 ---

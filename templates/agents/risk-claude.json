@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "risk-claude",
+  "purpose": "Audits a planned change for risks, with web search for upstream issues",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "access": "read-only-web",
+  "skills": [
+    "council-risk-assess"
+  ]
+}

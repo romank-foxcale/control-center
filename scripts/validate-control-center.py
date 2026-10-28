@@ -20,8 +20,8 @@ PROVIDERS = {"claude", "codex", "cursor"}
 # Model names that silently move to a newer model, so a role's behaviour changes with no change here
 # (docs/kit/decisions/0024-pinned-model-ids.md).
 FLOATING_MODELS = {"claude": {"opus", "sonnet", "haiku"}, "cursor": {"auto"}}
-ACCESS_LEVELS = {"read-only", "write-worktree"}
-COUNCIL_KINDS = {"coding", "testing", "debug", "threads"}
+ACCESS_LEVELS = {"read-only", "read-only-web", "write-worktree"}
+COUNCIL_KINDS = {"coding", "testing", "debug", "threads", "risk"}
 EXPECTED_LAYOUT = {
     "projectsRoot": ".",
     "repositories": "repos",
@@ -260,11 +260,24 @@ def validate_councils(root: Path, roles: dict[str, dict[str, Any]], errors: list
         if data.get("kind") not in COUNCIL_KINDS:
             errors.append(f"{relative}: kind must be one of {', '.join(sorted(COUNCIL_KINDS))}")
 
-        def require_role(slot: str, value: Any, access: str) -> None:
+        def require_role(slot: str, value: Any, access: str, *others: str) -> None:
             if value not in roles:
                 errors.append(f"{relative}: {slot} '{value}' is not a role in catalog/agents")
-            elif roles[value].get("access") != access:
-                errors.append(f"{relative}: {slot} '{value}' must have access '{access}'")
+            elif roles[value].get("access") not in (access, *others):
+                errors.append(f"{relative}: {slot} '{value}' must have access '{access}'"
+                              + "".join(f" or '{other}'" for other in others))
+
+        if data.get("kind") == "risk":
+            # Assessors audit a planned change and the judge merges their registers (./cc council risk). Nothing
+            # is written, so web search is the only access beyond reading (docs/kit/decisions/0029-risk-council.md).
+            assessors = data.get("assessors")
+            if not isinstance(assessors, list) or len(assessors) < 2 or len(set(map(str, assessors))) != len(assessors):
+                errors.append(f"{relative}: 'assessors' must list at least two distinct roles")
+            else:
+                for assessor in assessors:
+                    require_role("assessor", assessor, "read-only", "read-only-web")
+            require_role("judge", data.get("judge"), "read-only", "read-only-web")
+            continue
 
         if data.get("kind") == "threads":
             # Sceptics judge review threads (./cc prs judge); the judge settles their splits. No writer, approval or retries.

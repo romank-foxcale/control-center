@@ -14,6 +14,7 @@ First read `../_shared/cc-cli.md` and follow it.
 | Implement X on feature F | `./cc council run coding --feature <feature> [--repo <repo>] --task "<task>"` |
 | Write tests for X on feature F | `./cc council run testing --feature <feature> [--repo <repo>] --task "<task>"` |
 | Find and fix bug X on feature F | `./cc council run debug --feature <feature> [--repo <repo>] --task "<symptom>"` |
+| What could go wrong with change X? | `./cc council risk --repo <repo> --task "<change>"`: see the `cc-risk` skill |
 | Go ahead / approve | `./cc council approve <run-id>` |
 | Use proposal B instead / change something | `./cc council approve <run-id> [--pick <label>] [--note "<instruction>"]` |
 | Stop this run | `./cc council reject <run-id>` |

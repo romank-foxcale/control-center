@@ -1,0 +1,6 @@
+interface:
+  display_name: "CC Risk"
+  short_description: "Audit the risks of a planned change with a council"
+  default_prompt: "Use $cc-risk to audit the risks of a planned change before planning it."
+policy:
+  allow_implicit_invocation: true

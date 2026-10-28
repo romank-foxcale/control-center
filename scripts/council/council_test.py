@@ -178,6 +178,69 @@ def check_catalog_rules() -> None:
                                ({"judge": "writer"}, False)):
             threads.write_text(json.dumps({**data, **changes}))
             assert (errors() == []) == valid, (changes, errors())
+        threads.write_text(json.dumps(data))
+
+        # The risk council: at least two distinct assessors and a judge, read-only with or without web, from two families.
+        risk = root / "catalog" / "councils" / "risk.json"
+        data = json.loads(risk.read_text())
+        assert {json.loads((root / "catalog" / "agents" / f"{role}.json").read_text())["provider"]
+                for role in data["assessors"]} == {"claude", "codex"}, "two model families"
+        for changes, valid in (({}, True), ({"assessors": ["risk-claude", "risk-gpt", "security-grok"]}, True),
+                               ({"assessors": ["risk-claude"]}, False), ({"assessors": ["risk-gpt", "risk-gpt"]}, False),
+                               ({"assessors": ["writer", "risk-gpt"]}, False), ({"judge": "writer"}, False),
+                               ({"judge": "judge"}, True), ({"judge": None}, False)):
+            risk.write_text(json.dumps({**data, **changes}))
+            assert (errors() == []) == valid, (changes, errors())
+        risk.write_text(json.dumps(data))
+        # Web search is for risk roles only: a coding proposer with it is refused.
+        proposer = root / "catalog" / "agents" / "proposer-claude.json"
+        proposer.write_text(json.dumps({**json.loads(proposer.read_text()), "access": "read-only-web"}))
+        assert any("proposer 'proposer-claude' must have access 'read-only'" in error for error in errors()), errors()
+
+
+def check_risk_council(base: Path) -> None:
+    """Assessors work alone on the planned change, the judge sees them only as anonymous labels, and the run ends with
+    the judge's verdict in risk.md; a reply without a verdict fails the run instead of passing as advice."""
+    council = {"assessors": ["risk-a", "risk-b"], "judge": "risk-judge"}
+
+    def assess(name: str, answers: dict[str, str]) -> tuple[council_run.Run, FakeProviders]:
+        fake = FakeProviders(answers)
+        providers.run = fake
+        root = base / name
+        for identifier in [*council["assessors"], council["judge"]]:
+            path = root / "catalog" / "agents" / f"{identifier}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"id": identifier, "provider": "claude", "model": "m", "access": "read-only-web", "skills": []}))
+        directory = root / ".cc-local" / "runs" / "r1-risk"
+        directory.mkdir(parents=True)
+        (root / "control-center.json").write_text(json.dumps({"layout": {"worktrees": "worktrees"}}))
+        (directory / "state.json").write_text(json.dumps({
+            "id": "r1-risk", "council": "risk", "kind": "risk", "feature": "", "repository": "ai",
+            "repositories": {"ai": "repos/project/ai"}, "worktree": str(root), "targets": ["linux", "windows"], "stack": ["python"],
+            "task": "Replace TEI with PyTorch for embeddings", "stage": "assessing", "plan": ["assess", "risk summary"],
+        }))
+        run = council_run.Run(root, directory)
+        run.assess(council)
+        return run, fake
+
+    register = "VERDICT: GO-WITH-CONDITIONS\n\n## Summary\nParity of embeddings decides."
+    run, fake = assess("risk", {"risk-a": "R1 cosine drift", "risk-b": "R2 cold start", "risk-judge": register})
+    assessed = fake.prompts["risk-a"]
+    assert "Replace TEI with PyTorch" in assessed and "- ai: repos/project/ai" in assessed and "Control Center root" in assessed
+    assert "R2 cold start" not in assessed, "assessors work alone"
+    judged = fake.prompts["risk-judge"]
+    assert "# Assessment A" in judged and "# Assessment B" in judged and "R1 cosine drift" in judged and "R2 cold start" in judged
+    assert "risk-a" not in judged and "risk-b" not in judged, "the judge must not know who wrote which assessment"
+    assert sorted(run.state["labels"].values()) == ["risk-a", "risk-b"]
+    assert run.state["stage"] == "done" and run.state["decision"] == "GO-WITH-CONDITIONS", run.state
+    assert (run.directory / "risk.md").read_text().startswith("VERDICT: GO-WITH-CONDITIONS"), "the register is risk.md"
+    assert (run.directory / "assessment-risk-b.md").read_text().strip() == "R2 cold start"
+    assert council_run.find_run(run.root, "r1-risk").directory == run.directory, "risk runs are found without a feature"
+
+    run, _ = assess("risk-unparsed", {"risk-a": "R1", "risk-b": "R2", "risk-judge": "Looks fine overall."})
+    assert run.state["stage"] == "failed" and "VERDICT" in run.state["summary"], run.state
+    run, _ = assess("risk-no-go", {"risk-a": "R1", "risk-b": "R2", "risk-judge": "VERDICT: NO-GO\n\nbreaks the contract"})
+    assert run.state["decision"] == "NO-GO", "NO-GO is not read as GO"
 
 
 def check_review_lessons(base: Path) -> None:
@@ -239,6 +302,7 @@ def main() -> int:
 
         check_writer_history(base)
         check_review_lessons(base)
+        check_risk_council(base)
 
     check_catalog_rules()
     used = {"input": 10_000, "cached": 30_000, "output": 2_000}
@@ -255,6 +319,7 @@ def main() -> int:
     assert progress.plan("coding", {**council, "security": three})[-2:] == ["security", "security summary"]
     assert progress.plan("coding", {**council, "security": "security"})[-1] == "security"
     assert "security" not in progress.plan("coding", {**council, "security": []})
+    assert progress.plan("risk", {"assessors": ["a", "b"], "judge": "j"}) == ["assess", "risk summary"]
     print("council test passed")
     return 0
 

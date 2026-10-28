@@ -11,7 +11,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 
 # Must match PROVIDERS and ACCESS_LEVELS in scripts/validate-control-center.py.
@@ -20,14 +20,18 @@ BINARIES = {"claude": "claude", "codex": "codex", "cursor": "cursor-agent"}
 
 # Claude Code: --tools is the hard set of tools the model can call. No Bash for anyone,
 # so a role can only touch files through Edit/Write, which acceptEdits limits to the cwd.
+# read-only-web adds web search and fetch, for risk assessors that check upstream issues and release notes
+# (docs/kit/decisions/0029-risk-council.md); dontAsk denies them unless they are also allowed.
 CLAUDE_TOOLS = {
     "read-only": ["Read", "Grep", "Glob"],
+    "read-only-web": ["Read", "Grep", "Glob", "WebSearch", "WebFetch"],
     "write-worktree": ["Read", "Grep", "Glob", "Edit", "Write"],
 }
-CLAUDE_MODES = {"read-only": "dontAsk", "write-worktree": "acceptEdits"}
+CLAUDE_MODES = {"read-only": "dontAsk", "read-only-web": "dontAsk", "write-worktree": "acceptEdits"}
+CLAUDE_WEB = ["WebSearch", "WebFetch"]
 
 # Codex: the OS-level sandbox; workspace-write allows writes only under --cd.
-CODEX_SANDBOX = {"read-only": "read-only", "write-worktree": "workspace-write"}
+CODEX_SANDBOX = {"read-only": "read-only", "read-only-web": "read-only", "write-worktree": "workspace-write"}
 
 # Cursor: --print allows writes, and its modes only ask the model to hold back. Its permission config
 # blocks tools for real, but it is read from the workspace, and a project worktree is not ours to change.
@@ -161,10 +165,15 @@ def command(role: dict[str, Any], cwd: Path, last_message: Path) -> list[str]:
             "--permission-mode", CLAUDE_MODES[access],
             "--no-session-persistence",
             "--strict-mcp-config",
+            # A role is not a session in the folder it reads: no project settings, and no hooks, whose
+            # replies would otherwise become the role's final message (a CC's Stop hook did, 2026-10).
+            "--setting-sources", "user",
+            "--settings", '{"disableAllHooks": true}',
             # Streamed events let ./cc council status show what the agent is doing while it works.
             "--output-format", "stream-json",
             "--verbose",
             "--tools", *CLAUDE_TOOLS[access],
+            *(["--allowedTools", *CLAUDE_WEB] if access == "read-only-web" else []),
         ]
     if provider == "codex":
         return [
@@ -178,6 +187,7 @@ def command(role: dict[str, Any], cwd: Path, last_message: Path) -> list[str]:
             "--skip-git-repo-check",
             "--ephemeral",
             "--ignore-user-config",
+            *(["--config", 'web_search="live"'] if access == "read-only-web" else []),
             "--color", "never",
             # JSONL events instead of the echoed prompt: the log shows commands and messages as they happen.
             "--json",
@@ -199,23 +209,28 @@ def command(role: dict[str, Any], cwd: Path, last_message: Path) -> list[str]:
     raise ProviderError(f"unsupported provider: {provider}")
 
 
-def snapshot(worktree: Path) -> tuple[Path, dict[str, tuple[int, int]]]:
+def snapshot(worktree: Path, include: Iterable[Path] = ()) -> tuple[Path, dict[str, tuple[int, int]]]:
     """A throwaway copy of what Git would commit in the worktree, with Cursor's deny config, and a
-    fingerprint of every file in it, so a write that slips through is detected afterwards."""
+    fingerprint of every file in it, so a write that slips through is detected afterwards.
+    include: Git repositories inside the worktree that it ignores (a CC's clones), copied at the same place."""
     directory = Path(tempfile.mkdtemp(prefix="cc-cursor-"))
-    listed = subprocess.run(
-        ["git", "-C", str(worktree), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-        capture_output=True, text=True,
-    )
-    names = listed.stdout.split("\0") if listed.returncode == 0 else [
-        str(path.relative_to(worktree)) for path in worktree.rglob("*") if path.is_file()
-    ]
-    for name in filter(None, names):
-        source = worktree / name
-        if source.is_file() and not source.is_symlink():
-            target = directory / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+    for source_root in [worktree, *include]:
+        listed = subprocess.run(
+            ["git", "-C", str(source_root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            capture_output=True, text=True,
+        )
+        names = listed.stdout.split("\0") if listed.returncode == 0 else [
+            str(path.relative_to(source_root)) for path in source_root.rglob("*") if path.is_file()
+        ]
+        for name in filter(None, names):
+            source = source_root / name
+            if source.is_file() and not source.is_symlink():
+                target = directory / source.relative_to(worktree)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+    # Cursor runs a folder's Claude Code hooks too: a CC's hooks ran Python in the copy and changed it (2026-10).
+    for settings in (directory / ".claude").glob("settings*.json"):
+        settings.unlink()
     config = directory / ".cursor" / "cli.json"  # replaces a project's own config in the copy
     config.parent.mkdir(exist_ok=True)
     config.write_text(json.dumps(CURSOR_DENY), encoding="utf-8")
