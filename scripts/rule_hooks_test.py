@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import rule_hooks
@@ -253,6 +255,29 @@ def check_verify_before_push(base: Path) -> None:
     assert push("git push", base) is None, "not a Git repository"
 
 
+def check_stamp_ignores_cached_stats(base: Path) -> None:
+    """A same-size edit in the clock tick of an index entry that Git did not smudge: Git itself rehashes it because
+    the entry is racily clean, so the stamp must see the edit too. A copied index lost that (flaky in CI, 2026-10-28)."""
+    repository = base / "racy"
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    for key, value in (("core.checkStat", "minimal"), ("core.trustctime", "false"), ("user.name", "t"), ("user.email", "t@t")):
+        subprocess.run(["git", "-C", str(repository), "config", key, value], check=True)
+    (repository / "a.txt").write_text("one", encoding="utf-8")
+    tick = time.time_ns() - 10 * 10**9
+    os.utime(repository / "a.txt", ns=(tick, tick))  # older than the index Git writes next: not smudged
+    subprocess.run(["git", "-C", str(repository), "add", "a.txt"], check=True)
+    subprocess.run(["git", "-C", str(repository), "commit", "-q", "-m", "one"], check=True)
+    (repository / "a.txt").write_text("two", encoding="utf-8")
+    for path in (repository / "a.txt", repository / ".git" / "index"):
+        os.utime(path, ns=(tick, tick))
+    status = subprocess.run(["git", "-C", str(repository), "status", "--porcelain"], capture_output=True, text=True,
+                            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"}).stdout.strip()
+    assert status == "M a.txt", f"the setup must be one Git itself sees as edited: {status!r}"
+    edited = subprocess.run(["git", "-C", str(repository), "hash-object", "a.txt"], capture_output=True, text=True).stdout.strip()
+    stamped = verified.working_tree(repository)
+    assert verified.git(repository, "rev-parse", f"{stamped}:a.txt") == edited, "the stamp hashes content, not cached stats"
+
+
 def check_kit_layer(base: Path) -> None:
     """In a CC, docs/kit belongs to the kit: an edit asks first and points to an override decision. The template edits it."""
     def edit_at(root: Path, path: str, tool: str = "Edit"):
@@ -298,6 +323,7 @@ def main() -> int:
         check_edits(base / "cc")
         check_attributed_commits(base)
         check_verify_before_push(base)
+        check_stamp_ignores_cached_stats(base)
         check_isolation(base)
         check_reference_repos(base)
         check_kit_layer(base)
