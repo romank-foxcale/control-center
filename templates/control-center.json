@@ -7,5 +7,7 @@
     "repositories": "repos",
     "worktrees": "worktrees",
     "worktreePattern": "{feature}/{repository}_wt"
-  }
+  },
+  "localData": [],
+  "localCaches": []
 }

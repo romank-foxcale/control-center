@@ -29,6 +29,9 @@ EXPECTED_LAYOUT = {
     "worktreePattern": "{feature}/{repository}_wt",
 }
 PLAN_LIFECYCLES = ("active", "archived", "completed")
+# Machine paths in the committed manifest start at a per-user root, never at an absolute path
+# (docs/kit/decisions/0030-disk-management.md).
+USER_ROOTS = ("~/", "$HOME/", "$XDG_CACHE_HOME/", "%LOCALAPPDATA%\\", "%LOCALAPPDATA%/", "%USERPROFILE%\\", "%USERPROFILE%/")
 
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
@@ -313,6 +316,51 @@ def validate_councils(root: Path, roles: dict[str, dict[str, Any]], errors: list
             require_role("security", reviewer, "read-only")
 
 
+def validate_disk(manifest: dict[str, Any], errors: list[str]) -> None:
+    """localData, localCaches and backup (all optional): what doctor --disk measures and where ./cc backup writes."""
+
+    def entries(key: str) -> list[dict[str, Any]]:
+        value = manifest.get(key, [])
+        if not isinstance(value, list) or not all(isinstance(entry, dict) for entry in value):
+            errors.append(f"control-center.json: {key} must be a list of objects")
+            return []
+        names = [entry.get("name") for entry in value]
+        for index, name in enumerate(names):
+            if not isinstance(name, str) or not ID.fullmatch(name):
+                errors.append(f"control-center.json: {key}[{index}].name must use lowercase hyphen-case")
+        if len(set(map(str, names))) != len(names):
+            errors.append(f"control-center.json: {key} names must be distinct")
+        return value
+
+    def user_path(value: Any) -> bool:
+        return isinstance(value, str) and value.startswith(USER_ROOTS) and ".." not in re.split(r"[\\/]", value)
+
+    for index, entry in enumerate(entries("localData")):
+        where = f"control-center.json: localData[{index}]"
+        path = entry.get("path")
+        parts = path.split("/") if isinstance(path, str) else []
+        if parts[:2] != [".cc-local", "data"] or len(parts) < 3 or ".." in parts or "" in parts:
+            errors.append(f"{where}.path must be a folder under .cc-local/data/")
+        budget = entry.get("budgetGB")
+        if not isinstance(budget, (int, float)) or isinstance(budget, bool) or budget <= 0:
+            errors.append(f"{where}.budgetGB must be a positive number")
+        rebuild = entry.get("rebuild")
+        if rebuild is not None and not (isinstance(rebuild, str) and ID.fullmatch(rebuild)):
+            errors.append(f"{where}.rebuild must be null or the name of a flake app")
+        # What a rebuild costs or needs (remote hosts, credentials, GPU hours), so a budget warning never reads as "safe to delete".
+        if not isinstance(entry.get("rebuildNeeds"), str) or not entry["rebuildNeeds"].strip():
+            errors.append(f"{where}.rebuildNeeds must say what a rebuild needs, or 'nothing'")
+    for index, entry in enumerate(entries("localCaches")):
+        if not user_path(entry.get("path")):
+            errors.append(f"control-center.json: localCaches[{index}].path must start with one of {', '.join(USER_ROOTS)}")
+    backup = manifest.get("backup")
+    if backup is not None:
+        if not isinstance(backup, dict) or not user_path(backup.get("path")):
+            errors.append(f"control-center.json: backup.path must start with one of {', '.join(USER_ROOTS)}")
+        elif "keep" in backup and (not isinstance(backup["keep"], int) or isinstance(backup["keep"], bool) or not 1 <= backup["keep"] <= 50):
+            errors.append("control-center.json: backup.keep must be an integer from 1 to 50")
+
+
 def validate_plans(root: Path, errors: list[str]) -> None:
     plans_root = root / "plans"
     if not plans_root.is_dir():
@@ -373,6 +421,7 @@ def validate(root: Path, adapter_targets: dict[str, Any] | None = None) -> list[
         for folder in markdown_dirs
     ):
         errors.append("control-center.json: markdownDirs must be a list of folders relative to the CC root")
+    validate_disk(manifest, errors)
 
     repositories_dir = root / "catalog" / "repositories"
     if not repositories_dir.is_dir():

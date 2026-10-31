@@ -8,7 +8,10 @@ usage() {
     'Usage: ./cc <command> [arguments]' \
     '' \
     'Commands:' \
-    '  doctor         Check local prerequisites' \
+    '  doctor [--disk]  Check local prerequisites; --disk shows where disk space goes (read-only)' \
+    '  backup [--to DIR]  Copy the CC'"'"'s history, untracked files and .cc-local state outside the CC (on WSL: to a Windows drive)' \
+    '  gc [--apply] [--days N]  Free Nix store space: remove this CC'"'"'s result links, collect old generations (dry run without --apply)' \
+    '  relock         Move only the locked nixpkgs to the kit'"'"'s recommended rev, so CCs share Nix store paths' \
     '  show           Show flake packages, checks and apps' \
     '  check          Evaluate and build every flake check' \
     '  build <name>   Build .#<name>' \
@@ -69,6 +72,10 @@ fi
 case "$command_name" in
   doctor)
     require_nix
+    # Read-only, and never locks the flake. Why: docs/kit/decisions/0030-disk-management.md
+    if [[ "${1:-}" == "--disk" ]]; then
+      exec python3 "$cc_root/scripts/disk.py" "$cc_root"
+    fi
     nix --version
     if command -v docker >/dev/null 2>&1; then
       docker --version
@@ -84,6 +91,18 @@ case "$command_name" in
     fi
     python3 "$cc_root/scripts/council/providers.py" status
     python3 "$cc_root/scripts/repositories.py" "$cc_root" strays || true
+    ;;
+  backup)
+    exec python3 "$cc_root/scripts/backup.py" "$cc_root" "$@"
+    ;;
+  relock)
+    require_nix
+    exec python3 "$cc_root/scripts/relock.py" "$cc_root"
+    ;;
+  gc)
+    require_nix
+    # Never touches .cc-local. Why: docs/kit/decisions/0030-disk-management.md
+    exec python3 "$cc_root/scripts/store_gc.py" "$cc_root" "$@"
     ;;
   show)
     require_nix
