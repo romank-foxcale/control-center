@@ -180,7 +180,7 @@ Other commands, run from the CC folder:
 | `./cc doctor` | Check Nix, Docker and the `claude`/`codex` logins |
 | `./cc doctor --disk` | Where the disk space goes: Nix store, this CC's build links, `.cc-local`, caches, and on Windows the size of the WSL disk file. Changes nothing |
 | `./cc gc` / `./cc gc --apply` | Show, then free, Nix store space: removes this CC's `result` links and old Nix generations. Affects every CC on the machine; never touches `.cc-local` |
-| `./cc backup --to DIR` | Copy the CC's Git history, uncommitted files and `.cc-local` state to `DIR` (on Windows, a folder on `C:`); set `backup.path` in `control-center.json` to skip `--to` |
+| `./cc backup --to DIR [--push]` | Copy the CC's Git history, uncommitted files, `.cc-local` state, the project clones' branches and changed worktree files to `DIR` (on Windows, a folder on `C:`); `--push` also sends it to the branch `cc-backup` of the CC's private GitHub repository, replacing the previous one. Set `backup.path` (and `backup.push: true`) in `control-center.json` to skip the options. Restore from GitHub: `git fetch origin cc-backup && git archive FETCH_HEAD \| tar -x -C <dir>` |
 | `./cc relock` | Lock the same nixpkgs as the kit, so CCs on one machine share their tools; run `./cc check` and `./cc verify` before you commit it |
 | `./cc show` | List everything that can be built, checked or run |
 | `./cc build <name>` / `./cc run <name>` | Build or run one thing |

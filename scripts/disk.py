@@ -234,17 +234,21 @@ def pin_section(root: Path) -> list[str]:
 
 
 def backup_section(root: Path, manifest: dict, env: dict[str, str], runner: Runner) -> list[str]:
+    # From the remote-tracking ref the last push or fetch left; no network.
+    pushed = runner(["git", "-C", str(root), "log", "-1", "--format=%s", "refs/remotes/origin/cc-backup"])
+    remote = f"  on GitHub: {pushed.strip()} in origin's cc-backup branch" if pushed else \
+        "  on GitHub: no cc-backup branch known here; ./cc backup --push sends one"
     configured = (manifest.get("backup") or {}).get("path")
     if not configured:
-        return ["Backup", "  no backup.path in control-center.json; ./cc backup --to DIR makes one"]
+        return ["Backup", "  no backup.path in control-center.json; ./cc backup --to DIR makes one", remote]
     base = expand(configured, env, runner)
     folder = base / (manifest.get("name") or root.name) if base else None
     stamps = sorted(path.name for path in folder.iterdir() if re.fullmatch(r"\d{8}-\d{6}", path.name)) \
         if folder and folder.is_dir() else []
     if not stamps:
-        return ["Backup", f"  none yet in {configured}; run ./cc backup"]
+        return ["Backup", f"  none yet in {configured}; run ./cc backup", remote]
     age = (time.time() - time.mktime(time.strptime(stamps[-1], "%Y%m%d-%H%M%S"))) / 86400
-    return ["Backup", f"  newest {stamps[-1]}, {age:.0f} days old, {len(stamps)} kept in {folder}"]
+    return ["Backup", f"  newest {stamps[-1]}, {age:.0f} days old, {len(stamps)} kept in {folder}", remote]
 
 
 def wsl_section(env: dict[str, str], runner: Runner) -> list[str]:

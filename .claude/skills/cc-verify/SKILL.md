@@ -21,7 +21,7 @@ First read `../_shared/cc-cli.md` and follow it.
 | Is my setup OK? | `./cc doctor` |
 | Where does the disk space go? | `./cc doctor --disk` |
 | Free Nix store space | `./cc gc` (dry run), then `./cc gc --apply` **destructive** |
-| Back up the CC before risky disk work | `./cc backup [--to DIR]` |
+| Back up the CC before risky disk work | `./cc backup [--to DIR]`; add `--push` to also send it to the private `cc-backup` branch on GitHub |
 | Share one nixpkgs with other CCs | `./cc relock`, then `./cc check` and `./cc verify` before the commit |
 
 ## Rules

@@ -359,6 +359,8 @@ def validate_disk(manifest: dict[str, Any], errors: list[str]) -> None:
             errors.append(f"control-center.json: backup.path must start with one of {', '.join(USER_ROOTS)}")
         elif "keep" in backup and (not isinstance(backup["keep"], int) or isinstance(backup["keep"], bool) or not 1 <= backup["keep"] <= 50):
             errors.append("control-center.json: backup.keep must be an integer from 1 to 50")
+        elif "push" in backup and not isinstance(backup["push"], bool):
+            errors.append("control-center.json: backup.push must be true or false")
 
 
 def validate_plans(root: Path, errors: list[str]) -> None:

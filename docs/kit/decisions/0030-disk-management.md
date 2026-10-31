@@ -2,7 +2,7 @@
 id: kit.decision.0030-disk-management
 title: A CC shows where its disk space goes and frees Nix space without touching CC state
 status: accepted
-summary: ./cc doctor --disk is a read-only report (Nix store, this CC's GC roots, .cc-local state against declared and undeclared data, caches, three nix.conf keys, the nixpkgs pin, the WSL disk file); ./cc gc removes this CC's result links and collects old generations, dry run by default; ./cc backup copies Git history, uncommitted files and kit state to a folder outside the CC (a Windows drive on WSL); ./cc relock moves only the locked nixpkgs to the kit's recommended rev in nix/kit-nixpkgs.json. No command deletes anything in .cc-local, edits nix.conf or compacts a disk.
+summary: ./cc doctor --disk is a read-only report (Nix store, this CC's GC roots, .cc-local state against declared and undeclared data, caches, three nix.conf keys, the nixpkgs pin, the WSL disk file); ./cc gc removes this CC's result links and collects old generations, dry run by default; ./cc backup copies Git history, uncommitted files, kit state, every project clone's branches and changed worktree files to a folder outside the CC (a Windows drive on WSL), and with --push sends the same files as one replaced commit to the cc-backup branch of the CC's origin, only when GitHub says it is private; ./cc relock moves only the locked nixpkgs to the kit's recommended rev in nix/kit-nixpkgs.json. No command deletes anything in .cc-local, edits nix.conf or compacts a disk.
 verified_at: 2026-11-01
 evidence:
   - cc
@@ -25,6 +25,7 @@ relations:
   - docs/kit/decisions/0003-template-as-seed.md
   - docs/kit/decisions/0017-kit-and-project-layers.md
   - docs/kit/decisions/0027-python-gate-venv-cache.md
+  - docs/kit/decisions/0028-verify-before-push.md
   - docs/kit/decisions/0029-risk-council.md
 ---
 
@@ -48,11 +49,16 @@ A risk council ([0029](0029-risk-council.md)) audited the plan before it was bui
   - It then runs `nix-collect-garbage --delete-older-than <N>d` (default 14) as the user.
   - It refuses `--apply` while `nix build`, `nix flake`, `nix run` or `nix-build` of the user runs; an open `nix develop` shell does not block it.
   - It says that collection is store-wide.
-- **`./cc backup [--to DIR]`** writes `<DIR>/<cc name>/<stamp>/` with a verified `git bundle --all`, the files that differ from HEAD or are untracked, and `.cc-local` without `data/` and without other folders over 100 MiB (listed instead).
+- **`./cc backup [--to DIR] [--push]`** writes `<DIR>/<cc name>/<stamp>/` with a verified bundle of every branch and tag (not `--all`, which would put the previous `cc-backup` inside the next backup), the files that differ from HEAD or are untracked, `.cc-local` without `data/` and without other folders over 100 MiB (listed instead), a verified bundle of every branch of each project clone in `repos/project/`, and the files of each feature worktree that differ from its HEAD or are untracked. On one machine (2026-11-01), 36 worktree commits were on no remote; the clone bundles keep them.
   - On WSL the destination must be on a Windows drive; a destination inside the CC is refused.
-  - It keeps the newest `backup.keep` (default 5) and never uploads anything.
+  - It keeps the newest `backup.keep` (default 5).
+  - With `--push` (or `backup.push: true`; `--no-push` wins), after the local backup is complete, it pushes the same files to the branch `cc-backup` of the CC's `origin`:
+    - only when `gh repo view` says the repository is `PRIVATE`; otherwise, with no `origin`, or with a file over 95 MB (GitHub refuses 100 MB), it refuses and exits 1, and the local backup stays;
+    - as one commit with no parent, built with a temporary index and force-pushed, so the CC's HEAD, index, working tree and branches do not change, and the repository does not grow with each backup;
+    - `runs/` (agent transcripts with private code) goes too: a private repository of the CC's own owner is the boundary. A public repository is never a backup target;
+    - `cc-backup` holds no code tree that a check tested, so this push needs no verify stamp ([0028](0028-verify-before-push.md) is about code branches).
 - **`./cc relock`** runs `nix flake lock --override-input nixpkgs github:<owner>/<repo>/<kit rev>`, then a plain lock. If any other lock node changed or the rev moved again, it puts `flake.lock` back byte for byte. It never commits.
-- **`control-center.json`** may declare `localData` (name, path under `.cc-local/data/`, `budgetGB`, `rebuild` app or null, `rebuildNeeds`), `localCaches` (name, path) and `backup` (`path`, `keep`). All are optional. Machine paths start at `~/`, `$HOME/`, `$XDG_CACHE_HOME/`, `%LOCALAPPDATA%` or `%USERPROFILE%`, never at an absolute path. The rule for what goes where is [local data](../rules/local-data.md).
+- **`control-center.json`** may declare `localData` (name, path under `.cc-local/data/`, `budgetGB`, `rebuild` app or null, `rebuildNeeds`), `localCaches` (name, path) and `backup` (`path`, `keep`, `push`). All are optional. Machine paths start at `~/`, `$HOME/`, `$XDG_CACHE_HOME/`, `%LOCALAPPDATA%` or `%USERPROFILE%`, never at an absolute path. The rule for what goes where is [local data](../rules/local-data.md).
 - **Not in the kit**: compacting a disk, editing nix.conf, root collection, moving any CC's existing data, and a binary cache (a later decision, after a spike).
 
 ## Options considered
@@ -61,6 +67,8 @@ A risk council ([0029](0029-risk-council.md)) audited the plan before it was bui
 - Printing `nix config show`: one command, but it can print an access token.
 - Sparse VHD mode: WSL disables it for corruption risk.
 - A flake input on the kit for nixpkgs: exact sharing, but every CC would depend on the kit repo at evaluation time; a recorded rev and a warning keep CCs independent ([0003](0003-template-as-seed.md)).
+- Backups as commits on `main` or as a growing branch: the repository would grow by megabytes with every backup; one replaced commit on `cc-backup` keeps only the newest on GitHub, and the local folder keeps the older ones.
+- One repository with a folder per CC for backups: a CC's Git root is the CC root, so each CC pushes to its own private repository.
 - Moving data in the kit: data paths are fixed in each CC's project apps, so a move belongs to that CC's change, together with its apps.
 
 ## Consequences
