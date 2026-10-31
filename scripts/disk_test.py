@@ -67,6 +67,7 @@ class Report(unittest.TestCase):
         self.windows = self.temp / "mnt/c/local"
         (self.windows / "di-cc").mkdir(parents=True)
         self.commands: list[list[str]] = []
+        self.pushed: str | None = None
 
     def runner(self, command: list[str]) -> str | None:
         self.commands.append(command)
@@ -83,6 +84,8 @@ class Report(unittest.TestCase):
             return f"{self.windows}\n"
         if command[:2] == ["wslpath", "-w"]:
             return "C:\\Users\\me\\AppData\\Local\\di-cc\n"
+        if command[0] == "git" and command[-1] == "refs/remotes/origin/cc-backup":
+            return self.pushed
         if "powershell.exe" in command:
             return "3221225472" if "CC_PATH=C:\\Users\\me\\AppData\\Local\\di-cc" in command else None
         if command[:3] == ["nix", "config", "show"]:
@@ -153,6 +156,9 @@ class Report(unittest.TestCase):
             (self.home / "b/my-cc" / stamp).mkdir(parents=True)
         self.assertIn(f"  newest 20261030-120000, ", self.report())
         self.assertIn(f"2 kept in {self.home / 'b/my-cc'}", self.report())
+        self.assertIn("  on GitHub: no cc-backup branch known here", self.report())
+        self.pushed = "Backup 20261031-120000\n"
+        self.assertIn("  on GitHub: Backup 20261031-120000 in origin's cc-backup branch", self.report())
 
     def test_windows_cache_is_measured_by_windows(self) -> None:
         self.assertIn("  gate: %LOCALAPPDATA%\\di-cc cannot be resolved here", self.report())

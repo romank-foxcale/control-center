@@ -66,6 +66,8 @@ class DiskKeys(unittest.TestCase):
     def test_backup_keep_range(self) -> None:
         self.assertEqual(errors(backup={"path": "~/b", "keep": 0}), ["control-center.json: backup.keep must be an integer from 1 to 50"])
         self.assertEqual(errors(backup={"path": "~/b", "keep": 50}), [])
+        self.assertEqual(errors(backup={"path": "~/b", "push": True}), [])
+        self.assertEqual(errors(backup={"path": "~/b", "push": "yes"}), ["control-center.json: backup.push must be true or false"])
         self.assertEqual(len(errors(backup="~/b")), 1)
 
 

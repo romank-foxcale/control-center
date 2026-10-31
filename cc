@@ -9,7 +9,7 @@ usage() {
     '' \
     'Commands:' \
     '  doctor [--disk]  Check local prerequisites; --disk shows where disk space goes (read-only)' \
-    '  backup [--to DIR]  Copy the CC'"'"'s history, untracked files and .cc-local state outside the CC (on WSL: to a Windows drive)' \
+    '  backup [--to DIR] [--push]  Copy the CC'"'"'s history, uncommitted work and .cc-local state outside the CC (on WSL: to a Windows drive); --push also sends it to the private cc-backup branch' \
     '  gc [--apply] [--days N]  Free Nix store space: remove this CC'"'"'s result links, collect old generations (dry run without --apply)' \
     '  relock         Move only the locked nixpkgs to the kit'"'"'s recommended rev, so CCs share Nix store paths' \
     '  show           Show flake packages, checks and apps' \

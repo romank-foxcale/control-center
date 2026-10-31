@@ -38,4 +38,5 @@ relations:
 - Code, notes and scripts never live in `.cc-local`: they belong in the CC's tracked `scripts/`, `nix/` or `docs/`, or in a project repo through a worktree. `./cc doctor --disk` lists scripts it finds there.
 - A folder in `.cc-local` that is neither kit state nor declared data shows as undeclared once it passes 100 MiB, and `./cc backup` leaves it out with a line that says so. Declare it, move it, or copy it yourself.
 - Moving existing data into `.cc-local/data/` is one change together with every app, purge app and plan that names the old path, made while no process uses the data (for example with OpenSearch stopped).
+- `./cc backup --push` sends kit state, including `runs/`, to the private `cc-backup` branch of the CC's own repository; it refuses a repository that is not private. Data that should never leave the machine does not belong in kit state.
 - Caches outside the CC (venvs, model downloads) are declared in `localCaches` with a path that starts at a per-user root, so `doctor --disk` measures them.
