@@ -1,6 +1,6 @@
 ---
 name: cc-verify
-description: Verify, check, build, run or inspect the CC and feature worktrees through Nix with ./cc verify, check, build, run, show, validate, doctor and ./cc feature. Use when the user asks whether code works, passes or is ready to push, wants to build or run something, or check the setup.
+description: Verify, check, build, run or inspect the CC and feature worktrees through Nix with ./cc verify, check, build, run, show, validate, doctor and ./cc feature, and manage disk use with doctor --disk, gc, backup and relock. Use when the user asks whether code works, passes or is ready to push, wants to build or run something, check the setup, or free disk space.
 ---
 
 # CC verify
@@ -19,6 +19,10 @@ First read `../_shared/cc-cli.md` and follow it.
 | What can I build, check or run? | `./cc show` |
 | Validate the knowledge notes | `./cc validate` |
 | Is my setup OK? | `./cc doctor` |
+| Where does the disk space go? | `./cc doctor --disk` |
+| Free Nix store space | `./cc gc` (dry run), then `./cc gc --apply` **destructive** |
+| Back up the CC before risky disk work | `./cc backup [--to DIR]` |
+| Share one nixpkgs with other CCs | `./cc relock`, then `./cc check` and `./cc verify` before the commit |
 
 ## Rules
 
@@ -34,3 +38,4 @@ First read `../_shared/cc-cli.md` and follow it.
 - Verify prints one line per passing gate and the last 80 lines of a failing one, with the path of its full log under `.cc-local/runs/`. Report the final REPO/GATE/RESULT table and quote the first real failure; when the tail does not show the cause, search that log instead of running verify again. `--full` streams every line, for a person at a terminal.
 - Verify takes minutes. When it runs in the background, also run `./cc watch` as a streaming watcher (the Monitor tool where available) and relay each gate start, result and stall (`⚠`, a gate silent for 3 minutes) to the user as it happens; the user must never have to ask how it is going.
 - If the Nix part cannot run, run `./cc validate` and say explicitly that the Nix part was not verified.
+- `./cc gc --apply` deletes store paths for every CC on the machine: show the dry run and get a yes first. Nothing deletes `.cc-local` state; never remove data there yourself because `doctor --disk` shows it over budget, and never run disk compaction, `nix.conf` edits or sudo for the user (docs/kit/rules/local-data.md).

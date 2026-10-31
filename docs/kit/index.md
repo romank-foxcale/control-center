@@ -12,6 +12,7 @@ relations:
   - docs/kit/rules/bootstrap.md
   - docs/kit/rules/executable-processes.md
   - docs/kit/rules/knowledge-layout.md
+  - docs/kit/rules/local-data.md
   - docs/kit/rules/project-adapters.md
   - docs/kit/rules/quality-gates.md
   - docs/kit/rules/task-planning.md
@@ -29,6 +30,7 @@ relations:
   - docs/kit/decisions/0027-python-gate-venv-cache.md
   - docs/kit/decisions/0028-verify-before-push.md
   - docs/kit/decisions/0029-risk-council.md
+  - docs/kit/decisions/0030-disk-management.md
 ---
 
 # Kit knowledge map
@@ -40,6 +42,7 @@ This folder belongs to the kit. A CC never edits it: to change kit behaviour for
 - [Bootstrap and migration](rules/bootstrap.md)
 - [Executable processes](rules/executable-processes.md)
 - [Markdown knowledge layout](rules/knowledge-layout.md)
+- [Local state and data](rules/local-data.md)
 - [Connecting sibling projects](rules/project-adapters.md)
 - [Planning agent tasks](rules/task-planning.md)
 - [Quality gates per stack](rules/quality-gates.md)
@@ -80,3 +83,4 @@ This folder belongs to the kit. A CC never edits it: to change kit behaviour for
 - [Python host gates reuse a venv per dependency set, rebuilt at least weekly](decisions/0027-python-gate-venv-cache.md)
 - [Push only the tree a passing run tested, and run the change itself before calling it done](decisions/0028-verify-before-push.md)
 - [A change to architecture, dependencies, runtime, data or deployment gets a risk council before it is planned](decisions/0029-risk-council.md)
+- [A CC shows where its disk space goes and frees Nix space without touching CC state](decisions/0030-disk-management.md)

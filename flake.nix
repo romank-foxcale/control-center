@@ -92,6 +92,11 @@
                 export HOME=$TMPDIR
                 ${pkgs.python3}/bin/python ${self}/scripts/repositories_test.py
                 ${pkgs.python3}/bin/python -B ${self}/scripts/migrate_layout_test.py
+                ${pkgs.python3}/bin/python -B ${self}/scripts/validate_control_center_test.py
+                ${pkgs.python3}/bin/python -B ${self}/scripts/disk_test.py
+                ${pkgs.python3}/bin/python -B ${self}/scripts/store_gc_test.py
+                ${pkgs.python3}/bin/python -B ${self}/scripts/backup_test.py
+                ${pkgs.python3}/bin/python -B ${self}/scripts/relock_test.py
                 touch "$out"
               '';
               prs = pkgs.runCommand "control-center-prs" { nativeBuildInputs = [ pkgs.git ]; } ''

@@ -178,6 +178,10 @@ Other commands, run from the CC folder:
 | `./cc settings` | Settings panel: agents and their models, councils, repos, with a status line (logins, plans, runs). ←/→ switch tabs, ↑/↓ pick a row, `e` edits it (a role gets a model list of your logged-in subscriptions; a repo its main branch, link, kind, platforms, stack), `a` adds a repo by pasting its link, `d` removes one. `/cc-settings` opens this panel in the desktop app's Terminal panel; `./cc settings show` prints the same as text |
 | `./cc council status [run]` | Progress of council runs; for one run also what each working agent is doing right now |
 | `./cc doctor` | Check Nix, Docker and the `claude`/`codex` logins |
+| `./cc doctor --disk` | Where the disk space goes: Nix store, this CC's build links, `.cc-local`, caches, and on Windows the size of the WSL disk file. Changes nothing |
+| `./cc gc` / `./cc gc --apply` | Show, then free, Nix store space: removes this CC's `result` links and old Nix generations. Affects every CC on the machine; never touches `.cc-local` |
+| `./cc backup --to DIR` | Copy the CC's Git history, uncommitted files and `.cc-local` state to `DIR` (on Windows, a folder on `C:`); set `backup.path` in `control-center.json` to skip `--to` |
+| `./cc relock` | Lock the same nixpkgs as the kit, so CCs on one machine share their tools; run `./cc check` and `./cc verify` before you commit it |
 | `./cc show` | List everything that can be built, checked or run |
 | `./cc build <name>` / `./cc run <name>` | Build or run one thing |
 | `./cc repo list` | Connected repos: kind, main branch, status |
@@ -268,5 +272,6 @@ This updates `~/.cc-kit` only. Existing CCs are separate repos and never change 
 | `Nix flakes are disabled` | Re-run `~/.cc-kit/install/install.sh`. |
 | Everything is very slow | Your CC is under `/mnt/c`. Move it to `~/Projects`. |
 | Nix can't see a new file | Nix only sees files git knows about: `git add <file>`. |
+| WSL uses a lot of disk space | Run `./cc doctor --disk`, then `./cc gc`. Windows still shows the old size, because the WSL disk file does not shrink by itself: run `./cc backup`, close every WSL window, run `wsl --shutdown`, then compact the file with `diskpart` (`select vdisk file=...`, `attach vdisk readonly`, `compact vdisk`, `detach vdisk`) in an administrator PowerShell. |
 | Installer stops after "enabling systemd" | Run `wsl --shutdown` in PowerShell, then run the installer again. |
 | The tool doesn't list the skills | Run `./cc agents check` in the CC and make sure you opened the CC folder itself, not `~/Projects`. |
