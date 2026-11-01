@@ -251,6 +251,27 @@ def backup_section(root: Path, manifest: dict, env: dict[str, str], runner: Runn
     return ["Backup", f"  newest {stamps[-1]}, {age:.0f} days old, {len(stamps)} kept in {folder}", remote]
 
 
+def data_section(root: Path, manifest: dict, env: dict[str, str], runner: Runner) -> list[str]:
+    """One line per irreplaceable entry: the state of its newest mirror. ./cc backup where has the details."""
+    import backup_where  # imported here: backup_where imports this module
+    lines = backup_where.mirror_summary(root, manifest, env, runner)
+    return ["Irreplaceable data", *lines, "  details, links and restore commands: ./cc backup where"] if lines else []
+
+
+def wsl_disk_folder(env: dict[str, str], runner: Runner) -> str | None:
+    """The Windows folder that holds this distro's ext4.vhdx, from the Lxss registry key; None outside WSL."""
+    distro = env.get("WSL_DISTRO_NAME")
+    if not distro:
+        return None
+    query = runner(["reg.exe", "query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss", "/s"]) or ""
+    for block in re.split(r"\r?\n(?=HKEY_)", query):
+        name = re.search(r"DistributionName\s+REG_SZ\s+(.+?)\s*$", block, re.MULTILINE)
+        path = re.search(r"BasePath\s+REG_SZ\s+(.+?)\s*$", block, re.MULTILINE)
+        if name and path and name.group(1) == distro:
+            return path.group(1).removeprefix("\\\\?\\")
+    return None
+
+
 def wsl_section(env: dict[str, str], runner: Runner) -> list[str]:
     distro = env.get("WSL_DISTRO_NAME")
     if not distro:
@@ -259,13 +280,7 @@ def wsl_section(env: dict[str, str], runner: Runner) -> list[str]:
     free = runner(["df", "-B1", "--output=avail", "/"])
     if free and free.split()[-1].isdigit():
         lines.append(f"  free inside the distro: {human(int(free.split()[-1]))}")
-    query = runner(["reg.exe", "query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss", "/s"]) or ""
-    base = None
-    for block in re.split(r"\r?\n(?=HKEY_)", query):
-        name = re.search(r"DistributionName\s+REG_SZ\s+(.+?)\s*$", block, re.MULTILINE)
-        path = re.search(r"BasePath\s+REG_SZ\s+(.+?)\s*$", block, re.MULTILINE)
-        if name and path and name.group(1) == distro:
-            base = path.group(1).removeprefix("\\\\?\\")
+    base = wsl_disk_folder(env, runner)
     if base is None:
         return lines + ["  disk file: not found in the Lxss registry key"]
     converted = runner(["wslpath", "-u", f"{base}\\ext4.vhdx"])
@@ -294,6 +309,7 @@ def report(root: Path, env: dict[str, str], runner: Runner = run, out=sys.stdout
         lambda: nix_conf_section(env, runner),
         lambda: pin_section(root),
         lambda: backup_section(root, manifest, env, runner),
+        lambda: data_section(root, manifest, env, runner),
         lambda: wsl_section(env, runner),
     )
     for section in sections:

@@ -180,7 +180,10 @@ Other commands, run from the CC folder:
 | `./cc doctor` | Check Nix, Docker and the `claude`/`codex` logins |
 | `./cc doctor --disk` | Where the disk space goes: Nix store, this CC's build links, `.cc-local`, caches, and on Windows the size of the WSL disk file. Changes nothing |
 | `./cc gc` / `./cc gc --apply` | Show, then free, Nix store space: removes this CC's `result` links and old Nix generations. Affects every CC on the machine; never touches `.cc-local` |
-| `./cc backup --to DIR [--push]` | Copy the CC's Git history, uncommitted files, `.cc-local` state, the project clones' branches and changed worktree files to `DIR` (on Windows, a folder on `C:`); `--push` also sends it to the branch `cc-backup` of the CC's private GitHub repository, replacing the previous one. Set `backup.path` (and `backup.push: true`) in `control-center.json` to skip the options. Restore from GitHub: `git fetch origin cc-backup && git archive FETCH_HEAD \| tar -x -C <dir>` |
+| `./cc backup --to DIR [--push]` | Copy the CC's Git history, uncommitted files, `.cc-local` state, the project clones' branches and changed worktree files to `DIR` (on Windows, a folder on `C:`); `--push` also sends it to the branch `cc-backup` of the CC's private GitHub repository, replacing the previous one. Set `backup.path` (and `backup.push: true`) in `control-center.json` to skip the options. Restore from GitHub: `git fetch origin cc-backup && git archive FETCH_HEAD \| tar -x -C <dir>`. Data you tag `irreplaceable` in `localData` is mirrored next to it (or to `backup.dataPath`, for example another drive), never deleted there and never pushed |
+| `./cc backup where` | Where every backup and data mirror is, with Windows paths, the GitHub link and the restore commands. Works in a fresh clone too. Exit 0 means every irreplaceable entry has a complete mirror |
+| `./cc backup restore <name>` | Copy a data entry back from its mirror, as it was at the last complete sync (`--all` also brings files deleted since) |
+| `./cc data remove <name> [--mirror]` | Delete a data entry (and its mirror). You type `<cc name>/<name>` to confirm; an agent cannot run it |
 | `./cc relock` | Lock the same nixpkgs as the kit, so CCs on one machine share their tools; run `./cc check` and `./cc verify` before you commit it |
 | `./cc show` | List everything that can be built, checked or run |
 | `./cc build <name>` / `./cc run <name>` | Build or run one thing |
@@ -272,6 +275,6 @@ This updates `~/.cc-kit` only. Existing CCs are separate repos and never change 
 | `Nix flakes are disabled` | Re-run `~/.cc-kit/install/install.sh`. |
 | Everything is very slow | Your CC is under `/mnt/c`. Move it to `~/Projects`. |
 | Nix can't see a new file | Nix only sees files git knows about: `git add <file>`. |
-| WSL uses a lot of disk space | Run `./cc doctor --disk`, then `./cc gc`. Windows still shows the old size, because the WSL disk file does not shrink by itself: run `./cc backup`, close every WSL window, run `wsl --shutdown`, then compact the file with `diskpart` (`select vdisk file=...`, `attach vdisk readonly`, `compact vdisk`, `detach vdisk`) in an administrator PowerShell. |
+| WSL uses a lot of disk space | Run `./cc doctor --disk`, then `./cc gc`. Windows still shows the old size, because the WSL disk file does not shrink by itself: run `./cc backup` and check that `./cc backup where` exits 0, close every WSL window, run `wsl --shutdown`, then compact the file with `diskpart` (`select vdisk file=...`, `attach vdisk readonly`, `compact vdisk`, `detach vdisk`) in an administrator PowerShell. |
 | Installer stops after "enabling systemd" | Run `wsl --shutdown` in PowerShell, then run the installer again. |
 | The tool doesn't list the skills | Run `./cc agents check` in the CC and make sure you opened the CC folder itself, not `~/Projects`. |
