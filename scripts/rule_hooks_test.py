@@ -326,6 +326,88 @@ def check_session_start(base: Path) -> None:
     assert context(None) is None, "the template has no control-center.json and is never bootstrapped"
 
 
+def check_protected_data(base: Path) -> None:
+    """Irreplaceable data and its mirrors: an agent's delete, move-away or overwrite is denied in Bash and PowerShell
+    forms, before any ask; reading, listing and backing up pass. The mirror list comes from the locations file, so it
+    holds when the manifest is broken; removing the tag asks."""
+    root = base / "protected" / "di_CC"
+    entry = root / ".cc-local" / "data" / "emb"
+    entry.mkdir(parents=True)
+    (entry / "part.parquet").write_bytes(b"x")
+    (root / ".cc-local" / "data" / "features").mkdir()
+    (root / ".cc-local" / "hooks").mkdir()
+    manifest = {"name": "di_CC", "localData": [
+        {"name": "emb", "path": ".cc-local/data/emb", "tags": ["irreplaceable", "sensitive"],
+         "purge": ["ai-embeddings-purge"]},
+        {"name": "features", "path": ".cc-local/data/features", "purge": ["ai-features-purge"]}]}
+    (root / "control-center.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    mirror = "/mnt/c/Users/u/cc-backups/di_CC/data/emb"
+    (root / ".cc-local/hooks/backup-locations.json").write_text(json.dumps(
+        {"backups": ["/mnt/c/Users/u/cc-backups/di_CC"], "mirrors": {"emb": [mirror]}}), encoding="utf-8")
+
+    def run(command: str, cwd: Path = root) -> str | None:
+        return decision(rule_hooks.pre_bash({"tool_input": {"command": command}, "cwd": str(cwd)}, root))
+
+    denied = [
+        "rm -rf .cc-local/data/emb", "rm -rf .cc-local", "rm .cc-local/data/emb/part.parquet", f"rm -rf {root}",
+        "find .cc-local -delete", "find .cc-local/data -name '*.parquet' -delete",
+        "find .cc-local/data -name x -exec rm {} +", "git clean -fdx", "git clean -xdf", "git clean -fdX",
+        "cd .cc-local/data && rm -rf *", "cd .cc-local/data/emb; rm -rf .", "cd /tmp && rm -rf " + str(entry),
+        r"cmd.exe /c rmdir /s /q C:\Users\u\cc-backups\di_CC\data\emb",
+        r"Remove-Item -Recurse -Force C:\Users\u\cc-backups\di_CC\data\emb",
+        "Remove-Item -Recurse -Force .cc-local/data/emb", r"del C:\Users\u\cc-backups\di_CC\data\emb.json",
+        f"rm {mirror}.json", "python3 -c \"import shutil; shutil.rmtree('.cc-local/data/emb')\"",
+        "bash -c 'rm -rf .cc-local/data/emb'", ": > .cc-local/data/emb/part.parquet",
+        f"echo x > {mirror}.json", "echo x >> .cc-local/data/emb/part.parquet",
+        "cp /tmp/x .cc-local/data/emb/part.parquet", "mv .cc-local/data/emb /tmp/old", "mv /tmp/part.parquet .cc-local/data/emb/",
+        "cp -r /tmp/data .cc-local","mv /tmp/x .cc-local/data/emb/part.parquet",
+        f"rsync -a --delete /tmp/empty/ {mirror}/", "shred -u .cc-local/data/emb/part.parquet",
+        "truncate -s 0 .cc-local/data/emb/part.parquet", "./cc data remove emb", "cc data remove emb --mirror",
+        "script -qc './cc data remove emb' /dev/null", "./cc run ai-embeddings-purge",
+        "make x; rm -rf .cc-local/data/emb", "git push; rm -rf .cc-local/data/emb",
+        "D=.cc-local/data/emb; rm -rf $D", "export D=.cc-local/data; rm -rf ${D}/emb",
+    ]
+    for command in denied:
+        assert run(command) == "deny", command
+    allowed = [
+        "ls -la .cc-local/data/emb", "du -sh .cc-local", "./cc backup", "./cc backup where", "./cc backup restore emb",
+        "rm -rf .cc-local/data/features", "rm -rf /tmp/x", "git clean -fd", "./cc run ai-features-purge",
+        "cat .cc-local/data/emb/meta.json > /tmp/meta.json", "cp .cc-local/data/emb/part.parquet /tmp/",
+        "mv /tmp/new.parquet .cc-local/data/emb/", "cp -r /tmp/new .cc-local","python3 -c \"import pandas; pandas.read_parquet('.cc-local/data/emb')\"",
+        f"ls {mirror}", "rm -rf .cc-local/data/embeddings-old", "echo data remove",
+    ]
+    for command in allowed:
+        assert run(command) in (None, "ask"), command
+    assert run("git clean -fdx", root / "worktrees" / "f" / "api_wt") is None, "a worktree's own clean is its business"
+    reason = rule_hooks.pre_bash({"tool_input": {"command": "rm -rf .cc-local/data/emb"}, "cwd": str(root)}, root)
+    assert "./cc data remove emb" in reason["hookSpecificOutput"]["permissionDecisionReason"], reason
+
+    def edit(path: str, tool: str = "Write", **tool_input: str) -> str | None:
+        event = {"tool_name": tool, "tool_input": {"file_path": path, **tool_input}, "cwd": str(root)}
+        return decision(rule_hooks.pre_edit(event, root))
+
+    assert edit(str(entry / "part.parquet"), content="x") == "deny"
+    assert edit(str(entry / "new.json"), content="x") == "deny"
+    assert edit(f"{mirror}.json", "Edit", old_string="a", new_string="b") == "deny"
+    assert edit(r"C:\Users\u\cc-backups\di_CC\data\emb\x.bin", content="x") == "deny"
+    assert edit(str(root / ".cc-local/data/features/x.bin"), content="x") is None
+    without = {**manifest, "localData": [{**manifest["localData"][0], "tags": ["sensitive"]}, manifest["localData"][1]]}
+    assert edit(str(root / "control-center.json"), content=json.dumps(without)) == "ask", "dropping the tag asks"
+    assert edit(str(root / "control-center.json"), content=json.dumps({**manifest, "localData": []})) == "ask"
+    assert edit(str(root / "control-center.json"), content="{broken") == "ask"
+    assert edit(str(root / "control-center.json"), "Edit", old_string='"irreplaceable",', new_string="") == "ask"
+    assert edit(str(root / "control-center.json"), content=json.dumps({**manifest, "status": "ready"})) is None
+    assert edit(str(root / "control-center.json"), "Edit", old_string='"di_CC"', new_string='"di-cc"') is None
+
+    (root / "control-center.json").write_text("{broken", encoding="utf-8")
+    assert run(f"rm -rf {mirror}") == "deny", "the locations file still protects the mirror"
+
+    started = time.monotonic()
+    for _ in range(100):
+        run("ls -la .cc-local/data/emb && rm -rf /tmp/x")
+    assert time.monotonic() - started < 5, "the hook must stay fast: no subprocess per call"
+
+
 def main() -> int:
     check_nix_bypass()
     check_markdown_allowlist()
@@ -340,6 +422,7 @@ def main() -> int:
         check_reference_repos(base)
         check_kit_layer(base)
         check_session_start(base)
+        check_protected_data(base)
     check_notes_and_drift()
     check_cli()
     print("rule hooks test passed")

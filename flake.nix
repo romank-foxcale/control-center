@@ -96,6 +96,8 @@
                 ${pkgs.python3}/bin/python -B ${self}/scripts/disk_test.py
                 ${pkgs.python3}/bin/python -B ${self}/scripts/store_gc_test.py
                 ${pkgs.python3}/bin/python -B ${self}/scripts/backup_test.py
+                ${pkgs.python3}/bin/python -B ${self}/scripts/backup_where_test.py
+                ${pkgs.python3}/bin/python -B ${self}/scripts/data_test.py
                 ${pkgs.python3}/bin/python -B ${self}/scripts/relock_test.py
                 touch "$out"
               '';

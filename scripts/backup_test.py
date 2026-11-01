@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -171,6 +173,228 @@ class Backup(unittest.TestCase):
         with unittest.mock.patch.object(backup, "MAX_FILE_BYTES", 10):
             refused("which GitHub refuses")
         self.assertEqual(git(bare, "for-each-ref"), "")
+
+    # Irreplaceable data: one mirror per entry outside the stamp folders, never deleted from, with a record.
+
+    def tag(self, tags: list[str], **entry: object) -> None:
+        manifest = {"name": "my-cc", "backup": {"path": "~/b", "keep": 2},
+                    "localData": [{"name": "embeddings", "path": ".cc-local/data/embeddings", "budgetGB": 6,
+                                   "rebuild": None, "rebuildNeeds": "9 GPU hours", "tags": tags, **entry}]}
+        (self.root / "control-center.json").write_text(json.dumps(manifest))
+
+    @property
+    def source(self) -> Path:
+        return self.root / ".cc-local/data/embeddings"
+
+    @property
+    def mirror(self) -> Path:
+        return self.home / "b/my-cc/data/embeddings"
+
+    def record(self) -> dict:
+        return json.loads((self.home / "b/my-cc/data/embeddings.json").read_text())
+
+    def test_mirror_copies_changes_and_never_deletes(self) -> None:
+        self.tag(["irreplaceable"])
+        status, text = self.backup()
+        self.assertEqual(status, 0, text)
+        self.assertIn("data embeddings: mirrored 1 files, 1 copied", text)
+        self.assertEqual(hashes(self.mirror), hashes(self.source))
+        self.assertEqual(self.record()["state"], "complete")
+        self.assertEqual(set(self.record()["complete"]["files"]), {"a.parquet"})
+        self.assertIn("data embeddings: mirrored 1 files, 0 copied", self.backup()[1])
+        (self.source / "a.parquet").write_bytes(b"y" * 101)
+        (self.source / "deep/b.parquet").parent.mkdir()
+        (self.source / "deep/b.parquet").write_bytes(b"b")
+        self.assertIn("mirrored 2 files, 2 copied", self.backup()[1])
+        (self.source / "a.parquet").unlink()
+        status, text = self.backup()
+        self.assertEqual(status, 0, text)
+        self.assertIn("mirrored 1 files, 0 copied, 1 orphans (101 B)", text)
+        self.assertEqual((self.mirror / "a.parquet").read_bytes(), b"y" * 101)  # never deleted
+        self.assertEqual(set(self.record()["complete"]["files"]), {"deep/b.parquet"})
+        # prune keeps 2 stamp folders and never touches the mirror next to them
+        self.assertEqual(sorted(path.name for path in (self.home / "b/my-cc").iterdir())[-1:], ["data"])
+        self.assertEqual(len([path for path in (self.home / "b/my-cc").iterdir() if backup.STAMP.fullmatch(path.name)]), 2)
+
+    def test_size_or_whole_second_change_copies(self) -> None:
+        self.tag(["irreplaceable"])
+        self.backup()
+        path = self.source / "a.parquet"
+        later = (path.stat().st_mtime_ns // 10**9 + 5) * 10**9  # a whole second
+        path.write_bytes(b"z" * 100)  # same size, later time
+        os.utime(path, ns=(later, later))
+        self.assertIn("1 copied", self.backup()[1])
+        path.write_bytes(b"z" * 99)  # other size, same time
+        os.utime(path, ns=(later, later))
+        self.assertIn("1 copied", self.backup()[1])
+        self.assertEqual((self.mirror / "a.parquet").read_bytes(), b"z" * 99)
+        os.utime(path, ns=(later + 400_000_000,) * 2)  # sub-second only: /mnt/c drops it
+        self.assertIn("0 copied", self.backup()[1])
+
+    def test_only_irreplaceable_entries_are_mirrored(self) -> None:
+        for tags in ([], ["sensitive"]):
+            with self.subTest(tags=tags):
+                self.tag(tags)
+                status, text = self.backup()
+                self.assertEqual(status, 0, text)
+                self.assertNotIn("data embeddings", text)
+                self.assertFalse(self.mirror.exists())
+
+    def test_data_path_moves_the_mirror(self) -> None:
+        manifest = json.loads(json.dumps({"name": "my-cc", "backup": {"path": "~/b", "dataPath": "~/d"}}))
+        self.tag(["irreplaceable", "sensitive"])
+        manifest["localData"] = json.loads((self.root / "control-center.json").read_text())["localData"]
+        (self.root / "control-center.json").write_text(json.dumps(manifest))
+        self.assertEqual(self.backup()[0], 0)
+        self.assertTrue((self.home / "d/my-cc/data/embeddings/a.parquet").is_file())
+        self.assertFalse(self.mirror.exists())
+
+    def test_quiesce_skips_unless_pgrep_finds_nothing(self) -> None:
+        self.tag(["irreplaceable"], quiesce=["opensearch"])
+        for code, reason in ((0, "opensearch is running"), (2, "cannot check for opensearch (pgrep exit 2)"),
+                             (None, "cannot check for opensearch (pgrep not found)")):
+            with self.subTest(code=code), unittest.mock.patch.object(backup, "pgrep", return_value=code):
+                status, text = self.backup()
+                self.assertEqual(status, 1, text)
+                self.assertIn(f"error: data embeddings not mirrored: {reason}", text)
+                self.assertFalse(self.mirror.exists())
+                self.assertIn("backup: ", text)  # the stamp backup is still complete
+        with unittest.mock.patch.object(backup, "pgrep", return_value=1):
+            self.assertEqual(self.backup()[0], 0)
+
+    def test_writer_during_the_copy_leaves_it_incomplete(self) -> None:
+        self.tag(["irreplaceable"], quiesce=["opensearch"])
+        with unittest.mock.patch.object(backup, "pgrep", return_value=1):
+            self.backup()
+        first = self.record()["complete"]
+        with unittest.mock.patch.object(backup, "pgrep", side_effect=[1, 0]):
+            status, text = self.backup()
+        self.assertEqual(status, 1, text)
+        self.assertIn("error: data embeddings not mirrored: during the copy: opensearch is running", text)
+        self.assertEqual(self.record()["state"], "incomplete")
+        self.assertEqual(self.record()["complete"], first)  # the last complete sync is kept
+
+    def test_windows_writers_are_checked_on_wsl(self) -> None:
+        with unittest.mock.patch.object(backup, "pgrep", return_value=1), \
+                unittest.mock.patch.object(backup, "windows_command_lines", return_value=["py.exe ai-vectors-load x"]):
+            self.assertEqual(backup.busy(["ai-vectors-load"], {"WSL_DISTRO_NAME": "Ubuntu"}),
+                             "ai-vectors-load is running (Windows)")
+            self.assertIsNone(backup.busy(["ai-vectors-load"], {}))
+        with unittest.mock.patch.object(backup, "pgrep", return_value=1), \
+                unittest.mock.patch.object(backup, "windows_command_lines", return_value=None):
+            self.assertEqual(backup.busy(["x"], {"WSL_DISTRO_NAME": "Ubuntu"}), "cannot list Windows processes")
+
+    def test_failure_halfway_leaves_it_incomplete(self) -> None:
+        self.tag(["irreplaceable"])
+        self.backup()
+        first = self.record()["complete"]
+        for name in ("b", "c"):
+            (self.source / f"{name}.parquet").write_bytes(name.encode())
+        real = backup.shutil.copy2
+        calls = []
+
+        def failing(source, target):
+            calls.append(source)
+            if len(calls) == 2:
+                Path(target).write_bytes(b"half")  # a partial copy, as a full disk leaves it
+                raise OSError(28, "No space left on device")
+            return real(source, target)
+
+        with unittest.mock.patch.object(backup.shutil, "copy2", side_effect=failing):
+            status, text = self.backup()
+        self.assertEqual(status, 1, text)
+        self.assertIn("error: data embeddings not mirrored: No space left on device", text)
+        self.assertEqual(self.record()["state"], "incomplete")
+        self.assertEqual(self.record()["complete"], first)
+        self.assertEqual([path.name for path in self.mirror.rglob("*.cc-tmp")], [])
+
+    def test_unsafe_sources_are_skipped(self) -> None:
+        self.tag(["irreplaceable"])
+        (self.source / "A.parquet").write_bytes(b"upper")
+        (self.source / "a.PARQUET").write_bytes(b"lower")
+        status, text = self.backup()
+        self.assertEqual(status, 1, text)
+        self.assertIn("names differ only in case", text)
+        self.assertFalse(self.mirror.exists())
+        for path in (self.source / "A.parquet", self.source / "a.PARQUET"):
+            path.unlink()
+        outside = self.temp / "outside.txt"
+        outside.write_text("not data")
+        (self.source / "link").symlink_to(outside)
+        status, text = self.backup()
+        self.assertEqual(status, 0, text)
+        self.assertFalse((self.mirror / "link").exists())
+        self.assertNotIn("link", self.record()["complete"]["files"])
+        shutil.rmtree(self.source)
+        status, text = self.backup()
+        self.assertEqual(status, 1, text)
+        self.assertIn("error: data embeddings not mirrored: .cc-local/data/embeddings is missing", text)
+
+    def test_too_little_space_skips(self) -> None:
+        self.tag(["irreplaceable"])
+        usage = shutil.disk_usage(self.temp)._replace(free=50)
+        with unittest.mock.patch.object(backup.shutil, "disk_usage", return_value=usage):
+            status, text = self.backup()
+        self.assertEqual(status, 1, text)
+        self.assertIn("needs 100 B, 50 B free", text)
+        self.assertFalse(self.mirror.exists())
+
+    def test_a_broken_record_is_reported_and_replaced(self) -> None:
+        self.tag(["irreplaceable"])
+        self.backup()
+        (self.home / "b/my-cc/data/embeddings.json").write_text('{"state": "comp')
+        status, text = self.backup()
+        self.assertEqual(status, 0, text)
+        self.assertIn("previous record was unreadable", text)
+        self.assertEqual(self.record()["state"], "complete")
+
+    def test_drive_must_be_mounted(self) -> None:
+        mounts = "C:\\134 /mnt/c 9p rw 0 0\nnone /mnt/wsl tmpfs rw 0 0\n"
+        self.assertTrue(backup.drive_mounted(Path("/mnt/c/Users/me/cc"), mounts))
+        self.assertFalse(backup.drive_mounted(Path("/mnt/e/cc"), mounts))
+        self.assertFalse(backup.drive_mounted(Path("/mnt/wsl/cc"), mounts))
+        self.assertTrue(backup.drive_mounted(Path("/home/me/cc"), mounts))  # not a drive path: nothing to check
+
+    def test_data_never_reaches_the_push(self) -> None:
+        self.remote()
+        self.tag(["irreplaceable", "sensitive"])
+        marker = b"SENSITIVE-MARKER-7f3a"
+        (self.source / "secret.bin").write_bytes(marker * 3)
+        status, text = self.backup("--push")
+        self.assertEqual(status, 0, text)
+        bare = self.temp / "remote.git"
+        blobs = subprocess.run(["git", "-C", str(bare), "rev-list", "--objects", "cc-backup"], capture_output=True,
+                               text=True, check=True).stdout.split()
+        pushed = b"".join(subprocess.run(["git", "-C", str(bare), "cat-file", "-p", obj], capture_output=True).stdout
+                          for obj in blobs if len(obj) == 40)
+        found = [marker in pushed]
+        with tarfile.open(fileobj=io.BytesIO(subprocess.run(["git", "-C", str(bare), "archive", "cc-backup"],
+                                                            capture_output=True, check=True).stdout)) as outer:
+            for member in outer:
+                data = outer.extractfile(member).read() if member.isfile() else b""
+                if member.name.endswith(".tar.gz"):
+                    with tarfile.open(fileobj=io.BytesIO(data)) as inner:
+                        found += [marker in inner.extractfile(m).read() for m in inner if m.isfile()]
+                if member.name.endswith(".bundle"):
+                    clone = self.temp / f"scan-{len(found)}"
+                    (self.temp / "b.bundle").write_bytes(data)
+                    subprocess.run(["git", "clone", "-q", "--mirror", str(self.temp / "b.bundle"), str(clone)], check=True)
+                    found.append(marker.decode() in subprocess.run(
+                        ["git", "-C", str(clone), "log", "--all", "-p", "--binary"], capture_output=True, text=True,
+                        errors="replace").stdout)
+        self.assertEqual(found.count(True), 0)
+        self.assertGreater(len(found), 3)
+        self.assertTrue((self.mirror / "secret.bin").is_file())
+
+    def test_locations_are_remembered(self) -> None:
+        self.tag(["irreplaceable"])
+        self.backup()
+        self.backup("--to", str(self.temp / "elsewhere"))
+        locations = json.loads((self.root / ".cc-local/hooks/backup-locations.json").read_text())
+        self.assertEqual(locations["backups"], sorted([str((self.home / "b/my-cc").resolve()),
+                                                       str((self.temp / "elsewhere/my-cc").resolve())]))
+        self.assertEqual(locations["mirrors"]["embeddings"], sorted([
+            str(self.mirror.resolve()), str((self.temp / "elsewhere/my-cc/data/embeddings").resolve())]))
 
     def test_restore_gives_the_same_cc(self) -> None:
         status, text = self.backup()

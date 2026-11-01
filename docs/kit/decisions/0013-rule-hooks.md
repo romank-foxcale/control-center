@@ -3,7 +3,7 @@ id: kit.decision.0013-rule-hooks
 title: Claude Code hooks enforce the hard rules early; the gates still decide
 status: accepted
 summary: The AGENTS.md hard rules that a tool call reveals are enforced by Claude Code hooks at the moment of the call, and every rule that leaves an artifact is also gated by ./cc check or ./cc verify, so other tools and missed hooks are still caught.
-verified_at: 2026-10-28
+verified_at: 2026-11-01
 evidence:
   - scripts/rule_hooks.py
   - scripts/rule_hooks_test.py
@@ -20,6 +20,7 @@ relations:
   - docs/kit/decisions/0018-setup-starts-itself.md
   - docs/kit/decisions/0021-cc-check-in-ci.md
   - docs/kit/decisions/0028-verify-before-push.md
+  - docs/kit/decisions/0030-disk-management.md
 ---
 
 # Claude Code hooks enforce the hard rules early; the gates still decide
@@ -46,6 +47,7 @@ The hard rules in `AGENTS.md` were instruction text only. Agents break them when
   | Stay inside the CC ([0016](0016-per-cc-repos-and-worktrees.md)) | `ask` when a Read, Grep, Glob, edit or shell path resolves into a folder next to the CC | `./cc verify` fails on clones in `repos/` outside the catalog |
   | Base clones are never edited | deny edits under `repos/`, naming the feature worktree instead | reference clones are read-only on disk |
   | Kit knowledge is not edited in a CC ([0017](0017-kit-and-project-layers.md)) | `ask` before an edit under `docs/kit/` when the folder has `control-center.json` | none: the next kit update replaces the edit |
+  | Irreplaceable data is deleted only by the user ([0030](0030-disk-management.md)) | runs first in `pre-bash` (Bash and PowerShell), so no earlier `ask` in the same line hides it: deny a delete, move-away or overwrite that reaches an irreplaceable `localData` entry, its mirror or record (from `.cc-local/hooks/backup-locations.json`), or a folder above them; also `git clean -x` in the CC, `./cc data remove` and its wrappers, and the entry's `purge` apps. Deny an Edit or Write into those paths; `ask` before an edit of `control-center.json` drops the tag | none: `./cc data remove` reads the typed name from the user's terminal and refuses inside Claude Code |
   | A reference repo is guidance, not truth | after the first read of `repos/reference/<id>` in a session, add a note to check it against the project repos | none: it is judgement |
 
 - The `session-start` hook enforces no rule: it makes a CC that is not set up open with the setup interview ([0018](0018-setup-starts-itself.md)).
@@ -61,7 +63,7 @@ The hard rules in `AGENTS.md` were instruction text only. Agents break them when
 
 - A CC that keeps other committed Markdown, such as a `research/` folder of source material, lists it in `markdownDirs` (validated by the `bootstrap` check). The exception is per CC and visible, so the template's default stays strict.
 - Hooks exist only in Claude Code. Codex, Cursor and OpenCode rely on the gates.
-- Hooks match shell text, so a command hidden in a script or another shell (`wsl.exe bash -lc ...`) passes the hook; only the gates are complete where a gate exists. CI runs `./cc check` on every pull request so the gates do not depend on someone running them ([0021](0021-cc-check-in-ci.md)).
+- Hooks match shell text, so a command hidden in a script or another shell (`wsl.exe bash -lc ...`) passes the hook; only the gates are complete where a gate exists. For irreplaceable data the hook also cannot see a variable set by an earlier command, a delete inside a script file, or an alias; it reads `bash -c` strings and inline Python that deletes or writes, and variables set in the same line. A `/mnt/c/...`, `C:\...` and `\\wsl.localhost\...` spelling of one path count as the same path. CI runs `./cc check` on every pull request so the gates do not depend on someone running them ([0021](0021-cc-check-in-ci.md)).
 - New CCs get the hooks through `./cc bootstrap install`; existing CCs only through a migration.
 
 ## Revisit when

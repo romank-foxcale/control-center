@@ -2,7 +2,7 @@
 id: kit.decision.0030-disk-management
 title: A CC shows where its disk space goes and frees Nix space without touching CC state
 status: accepted
-summary: ./cc doctor --disk is a read-only report (Nix store, this CC's GC roots, .cc-local state against declared and undeclared data, caches, three nix.conf keys, the nixpkgs pin, the WSL disk file); ./cc gc removes this CC's result links and collects old generations, dry run by default; ./cc backup copies Git history, uncommitted files, kit state, every project clone's branches and changed worktree files to a folder outside the CC (a Windows drive on WSL), and with --push sends the same files as one replaced commit to the cc-backup branch of the CC's origin, only when GitHub says it is private; ./cc relock moves only the locked nixpkgs to the kit's recommended rev in nix/kit-nixpkgs.json. No command deletes anything in .cc-local, edits nix.conf or compacts a disk.
+summary: ./cc doctor --disk is a read-only report (Nix store, this CC's GC roots, .cc-local state against declared and undeclared data, caches, three nix.conf keys, the nixpkgs pin, the WSL disk file); ./cc gc removes this CC's result links and collects old generations, dry run by default; ./cc backup copies Git history, uncommitted files, kit state, every project clone's branches and changed worktree files to a folder outside the CC (a Windows drive on WSL), and with --push sends the same files as one replaced commit to the cc-backup branch of the CC's origin, only when GitHub says it is private; localData tagged irreplaceable is mirrored to a folder that is never deleted from, with a record of each complete sync, and is never pushed; ./cc backup where lists every backup and mirror with links and restore commands, ./cc backup restore copies an entry back, and only ./cc data remove, confirmed by the user typing the name in their own terminal, deletes such data, while a Claude Code hook denies agent deletes; ./cc relock moves only the locked nixpkgs to the kit's recommended rev in nix/kit-nixpkgs.json. No command deletes anything in .cc-local, edits nix.conf or compacts a disk.
 verified_at: 2026-11-01
 evidence:
   - cc
@@ -12,6 +12,12 @@ evidence:
   - scripts/store_gc_test.py
   - scripts/backup.py
   - scripts/backup_test.py
+  - scripts/backup_where.py
+  - scripts/backup_where_test.py
+  - scripts/data.py
+  - scripts/data_test.py
+  - scripts/rule_hooks.py
+  - scripts/rule_hooks_test.py
   - scripts/relock.py
   - scripts/relock_test.py
   - scripts/validate-control-center.py
@@ -23,6 +29,7 @@ relations:
   - docs/kit/index.md
   - docs/kit/rules/local-data.md
   - docs/kit/decisions/0003-template-as-seed.md
+  - docs/kit/decisions/0013-rule-hooks.md
   - docs/kit/decisions/0017-kit-and-project-layers.md
   - docs/kit/decisions/0027-python-gate-venv-cache.md
   - docs/kit/decisions/0028-verify-before-push.md
@@ -57,8 +64,21 @@ A risk council ([0029](0029-risk-council.md)) audited the plan before it was bui
     - as one commit with no parent, built with a temporary index and force-pushed, so the CC's HEAD, index, working tree and branches do not change, and the repository does not grow with each backup;
     - `runs/` (agent transcripts with private code) goes too: a private repository of the CC's own owner is the boundary. A public repository is never a backup target;
     - `cc-backup` holds no code tree that a check tested, so this push needs no verify stamp ([0028](0028-verify-before-push.md) is about code branches).
+  - **Irreplaceable data.** A `localData` entry tagged `irreplaceable` (one CC's embeddings took 9 GPU hours) is mirrored after the stamp backup to `<backup.dataPath or DIR>/<cc name>/data/<entry>/`, outside every stamp folder, so `prune` and `--push` never see it:
+    - one copy per entry, not one per backup: five full copies of 24 GiB would not fit the drive;
+    - a file is copied when the mirror lacks it or its size or whole-second time differs (`/mnt/c` keeps whole seconds only); a copy goes to a temporary name and is renamed;
+    - the mirror never deletes a file: files gone from the CC stay as orphans, counted and sized;
+    - `<entry>.json` is marked incomplete when a sync starts and keeps the file list of the last complete sync; restore uses that list, so deleted and replaced files do not come back mixed in (a restored OpenSearch node started clean in a spike);
+    - the entry is skipped, and the run exits 1, when the folder is missing, a `quiesce` pattern matches a process (WSL `pgrep -f` and, on WSL, Windows command lines, because Python started from Windows is not in WSL `pgrep`; only "no match" counts as clear), a writer appears during the copy, two names differ only in case (a Windows drive merges them), the free space is short, the destination is not a mounted drive, or a copy fails;
+    - symlinks are not followed; entry paths may not overlap.
+  - `sensitive` data never leaves the machine's drives. No data is pushed at all; a test looks for a sensitive file's bytes in every pushed archive and bundle. A later upload target must refuse it.
+  - `backup.dataPath` may name a drive (`E:\...`, `/mnt/e/...`), so the mirror can live on another disk; it stays in the tracked manifest so a fresh clone knows it. A mirror on the WSL disk's own drive survives a broken WSL disk or a wrong delete, not a drive failure, and `where` says so.
+  - Each run writes `.cc-local/hooks/backup-locations.json` (every backup folder and mirror, also from `--to`) before the state archive.
+- **`./cc backup where`** reads the manifest, the backup folders, the records, the locations file and the `cc-backup` remote-tracking ref, with no network, so it works in a CC cloned again from GitHub. It prints each backup folder (WSL and Windows path, age), the GitHub link, each entry's mirror state and restore command, and warnings: no complete mirror, a stopped sync, a sync older than 7 days, the WSL disk's drive, OneDrive (`%OneDrive%` and its variants), undeclared `.cc-local` folders over 1 GiB. It says it cannot see other sync clients. It exits 1 when an irreplaceable entry has no complete mirror: **compact a WSL disk only after it exits 0.** `doctor --disk` shows one line per entry.
+- **`./cc backup restore <name> [--all]`** copies the last complete sync's files (`--all`: also orphans) into a missing or empty folder, and checks the whole list for missing files and symlinks before it writes anything.
+- **`./cc data remove <name> [--mirror]`** is the only kit command that deletes such data. It shows the size, reads `<cc name>/<entry>` from `/dev/tty` (not stdin), and refuses inside Claude Code (`CLAUDECODE`) or without a terminal. A hook ([0013](0013-rule-hooks.md)) denies agent commands that would delete, move away or overwrite an irreplaceable entry or a mirror, and asks before an edit drops the tag.
 - **`./cc relock`** runs `nix flake lock --override-input nixpkgs github:<owner>/<repo>/<kit rev>`, then a plain lock. If any other lock node changed or the rev moved again, it puts `flake.lock` back byte for byte. It never commits.
-- **`control-center.json`** may declare `localData` (name, path under `.cc-local/data/`, `budgetGB`, `rebuild` app or null, `rebuildNeeds`), `localCaches` (name, path) and `backup` (`path`, `keep`, `push`). All are optional. Machine paths start at `~/`, `$HOME/`, `$XDG_CACHE_HOME/`, `%LOCALAPPDATA%` or `%USERPROFILE%`, never at an absolute path. The rule for what goes where is [local data](../rules/local-data.md).
+- **`control-center.json`** may declare `localData` (name, path under `.cc-local/data/`, `budgetGB`, `rebuild` app or null, `rebuildNeeds`, `tags`, `quiesce`, `purge`), `localCaches` (name, path) and `backup` (`path`, `keep`, `push`, `dataPath`). All are optional. Machine paths start at `~/`, `$HOME/`, `$XDG_CACHE_HOME/`, `%LOCALAPPDATA%` or `%USERPROFILE%`, never at an absolute path. The rule for what goes where is [local data](../rules/local-data.md).
 - **Not in the kit**: compacting a disk, editing nix.conf, root collection, moving any CC's existing data, and a binary cache (a later decision, after a spike).
 
 ## Options considered
@@ -68,6 +88,10 @@ A risk council ([0029](0029-risk-council.md)) audited the plan before it was bui
 - Sparse VHD mode: WSL disables it for corruption risk.
 - A flake input on the kit for nixpkgs: exact sharing, but every CC would depend on the kit repo at evaluation time; a recorded rev and a warning keep CCs independent ([0003](0003-template-as-seed.md)).
 - Backups as commits on `main` or as a growing branch: the repository would grow by megabytes with every backup; one replaced commit on `cc-backup` keeps only the newest on GitHub, and the local folder keeps the older ones.
+- A copy of the data in every stamp backup: simple, but 24 GiB per backup does not fit; a mirror that also deletes would carry a wrong delete into the backup on the next run.
+- Tags `important` and `hard-to-recreate` next to `irreplaceable`: they mean the same thing to the backup, and two words for one rule invite drift.
+- Data on GitHub: files over 100 MB are refused and repositories slow down above a few GB, and sensitive data must stay local anyway.
+- A lock file the data apps write, instead of `quiesce`: the spike showed every di_CC writer is visible through `pgrep` or Windows command lines, so no app needs changing.
 - One repository with a folder per CC for backups: a CC's Git root is the CC root, so each CC pushes to its own private repository.
 - Moving data in the kit: data paths are fixed in each CC's project apps, so a move belongs to that CC's change, together with its apps.
 
@@ -78,6 +102,9 @@ A risk council ([0029](0029-risk-council.md)) audited the plan before it was bui
 - A relock can change tool versions and fixed-output hashes (for example plugins pinned to a package version), so the CC runs `./cc check` and `./cc verify` before it commits the new lock.
 - Existing CCs get the commands only when they take this kit change ([0017](0017-kit-and-project-layers.md)). Until then their data stays undeclared.
 - Not run on macOS, native Linux or a machine with several WSL distros; fixture tests cover those paths.
+- The mirror compares size and time, not checksums: a file rewritten with the same size inside the same second stays old. `where` says how it compares.
+- The delete protection is complete only for kit commands. The hook sees shell text in Claude Code only; Codex, Cursor and the user's shell are not guarded (0013 lists what the hook cannot see).
+- A data app that deletes its own output must refuse an irreplaceable entry itself; listing it in `purge` makes the hook deny it for agents.
 
 ## Revisit when
 

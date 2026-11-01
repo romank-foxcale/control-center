@@ -32,6 +32,8 @@ PLAN_LIFECYCLES = ("active", "archived", "completed")
 # Machine paths in the committed manifest start at a per-user root, never at an absolute path
 # (docs/kit/decisions/0030-disk-management.md).
 USER_ROOTS = ("~/", "$HOME/", "$XDG_CACHE_HOME/", "%LOCALAPPDATA%\\", "%LOCALAPPDATA%/", "%USERPROFILE%\\", "%USERPROFILE%/")
+DRIVE_FOLDER = re.compile(r"(?:[A-Za-z]:[\\/]|/mnt/[a-z]/)[^\\/]")
+DATA_TAGS = ("irreplaceable", "sensitive")
 
 
 def load_json(path: Path, errors: list[str]) -> dict[str, Any] | None:
@@ -335,6 +337,15 @@ def validate_disk(manifest: dict[str, Any], errors: list[str]) -> None:
     def user_path(value: Any) -> bool:
         return isinstance(value, str) and value.startswith(USER_ROOTS) and ".." not in re.split(r"[\\/]", value)
 
+    def pattern(value: Any) -> bool:
+        if not isinstance(value, str) or not value.strip():
+            return False
+        try:
+            re.compile(value)
+        except re.error:
+            return False
+        return True
+
     for index, entry in enumerate(entries("localData")):
         where = f"control-center.json: localData[{index}]"
         path = entry.get("path")
@@ -350,6 +361,22 @@ def validate_disk(manifest: dict[str, Any], errors: list[str]) -> None:
         # What a rebuild costs or needs (remote hosts, credentials, GPU hours), so a budget warning never reads as "safe to delete".
         if not isinstance(entry.get("rebuildNeeds"), str) or not entry["rebuildNeeds"].strip():
             errors.append(f"{where}.rebuildNeeds must say what a rebuild needs, or 'nothing'")
+        # irreplaceable: ./cc backup must mirror it; sensitive: it never leaves this machine's drives.
+        tags = entry.get("tags", [])
+        if not isinstance(tags, list) or not all(tag in DATA_TAGS for tag in tags) or len(set(tags)) != len(tags):
+            errors.append(f"{where}.tags must be a list of distinct tags from {', '.join(DATA_TAGS)}")
+        if "quiesce" in entry and not (isinstance(entry["quiesce"], list) and all(map(pattern, entry["quiesce"]))):
+            errors.append(f"{where}.quiesce must be a list of process patterns (pgrep -f)")
+        purge = entry.get("purge", ["none"])
+        if not (isinstance(purge, list) and purge and all(isinstance(app, str) and ID.fullmatch(app) for app in purge)):
+            errors.append(f"{where}.purge must be a list of flake app names")
+    # Nested or equal paths would let one entry's mirror, restore or removal reach another's data.
+    data = manifest.get("localData")
+    folders = sorted(entry["path"].rstrip("/") for entry in (data if isinstance(data, list) else [])
+                     if isinstance(entry, dict) and isinstance(entry.get("path"), str))
+    for first, second in zip(folders, folders[1:]):
+        if second == first or second.startswith(first + "/"):
+            errors.append(f"control-center.json: localData paths must not overlap: {first} and {second}")
     for index, entry in enumerate(entries("localCaches")):
         if not user_path(entry.get("path")):
             errors.append(f"control-center.json: localCaches[{index}].path must start with one of {', '.join(USER_ROOTS)}")
@@ -361,6 +388,13 @@ def validate_disk(manifest: dict[str, Any], errors: list[str]) -> None:
             errors.append("control-center.json: backup.keep must be an integer from 1 to 50")
         elif "push" in backup and not isinstance(backup["push"], bool):
             errors.append("control-center.json: backup.push must be true or false")
+        # Only the data mirror may name a drive: an external disk has no per-user root, and the path must stay
+        # tracked so ./cc backup where finds it after a fresh clone.
+        if isinstance(backup, dict) and "dataPath" in backup and not (user_path(backup["dataPath"]) or (
+                isinstance(backup["dataPath"], str) and DRIVE_FOLDER.match(backup["dataPath"])
+                and ".." not in re.split(r"[\\/]", backup["dataPath"]))):
+            errors.append("control-center.json: backup.dataPath must be a drive folder (E:\\... or /mnt/e/...) or start "
+                          f"with one of {', '.join(USER_ROOTS)}")
 
 
 def validate_plans(root: Path, errors: list[str]) -> None:

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import posixpath
 import re
 import shlex
 import subprocess
@@ -118,6 +120,172 @@ def attributed_commits(repository: Path, base: str) -> list[str]:
     return found
 
 
+# Irreplaceable data (docs/kit/decisions/0030-disk-management.md): localData entries tagged irreplaceable and their
+# mirrors are deleted only by ./cc data remove, which the user runs and confirms in their own terminal. The hook reads
+# shell text: a variable from an earlier command, a script file or an alias is not seen (0013 names these limits).
+DELETE_VERBS = {"rm", "rmdir", "unlink", "shred", "truncate", "remove-item", "ri", "del", "erase", "rd"}
+COPY_VERBS = {"mv", "cp", "move-item", "copy-item", "move", "copy"}
+SHELLS = {"bash", "sh", "zsh", "dash"}
+INTERPRETERS = {"python", "python3", "node", "perl", "ruby", "pwsh", "powershell", "powershell.exe"}
+DESTRUCTIVE_CODE = re.compile(r"rmtree|\bremove\(|unlink|rmdir|\brename\(|\breplace\(|truncate|Remove-Item|"
+                              r"[\"']w[b+]?[\"']|write_(?:bytes|text)", re.IGNORECASE)
+GROUP_BREAK = {";", "&&", "||", "|", "&", "(", ")"}
+
+
+def path_key(raw: str) -> str:
+    """One spelling for a path seen from WSL or Windows: /mnt/c/A, C:\\A and \\\\wsl.localhost\\<distro>\\home\\u."""
+    raw = raw.strip().strip("'\"")
+    drive = re.match(r"^/mnt/([A-Za-z])(?:/(.*))?$", raw) or re.match(r"^([A-Za-z]):[\\/]?(.*)$", raw)
+    if drive:
+        return posixpath.normpath(f"{drive.group(1).lower()}:/{(drive.group(2) or '').replace(chr(92), '/')}").lower()
+    share = re.match(r"^\\\\wsl(?:\.localhost|\$)\\[^\\]+\\(.*)$", raw)
+    if share:
+        raw = "/" + share.group(1).replace("\\", "/")
+    return posixpath.normpath(raw)
+
+
+def joined(cwd: str, raw: str) -> str:
+    raw = os.path.expanduser(raw.strip("'\""))
+    key = path_key(raw)
+    return key if key.startswith("/") or re.match(r"^[a-z]:/", key) else posixpath.normpath(f"{path_key(cwd)}/{raw}")
+
+
+def inside(path: str, folder: str) -> bool:
+    return path == folder or path.startswith(folder.rstrip("/") + "/")
+
+
+def protected(root: Path) -> tuple[list[str], dict[str, str], list[str]]:
+    """Protected folders and files, the entry each belongs to, and the purge apps of irreplaceable entries. The mirrors
+    come from the locations file ./cc backup writes, so they stay protected when the manifest is broken."""
+    paths: dict[str, str] = {}
+    purges: list[str] = []
+    try:
+        manifest = json.loads((root / "control-center.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        manifest = {}
+    for entry in manifest.get("localData") or [] if isinstance(manifest, dict) else []:
+        if isinstance(entry, dict) and "irreplaceable" in (entry.get("tags") or []) and isinstance(entry.get("path"), str):
+            paths[joined(str(root), entry["path"])] = str(entry.get("name"))
+            purges += [app for app in entry.get("purge") or [] if isinstance(app, str)]
+    try:
+        known = json.loads((root / ".cc-local" / "hooks" / "backup-locations.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        known = {}
+    for name, mirrors in (known.get("mirrors") or {}).items() if isinstance(known, dict) else []:
+        for mirror in mirrors if isinstance(mirrors, list) else []:
+            paths[path_key(mirror)] = name
+            paths[path_key(f"{mirror}.json")] = name
+    return sorted(paths), paths, purges
+
+
+def protected_hit(path: str, folders: list[str]) -> str | None:
+    """The protected path that path is, is inside, or is a folder above."""
+    return next((folder for folder in folders if inside(path, folder) or inside(folder, path)), None)
+
+
+def destroys_data(command: str, cwd: str, root: Path, folders: list[str], purges: list[str]) -> str | None:
+    """The protected path a shell line would delete, move away or overwrite, or the reason it is refused."""
+    if re.search(r"(?:^|[\s/'\"])cc\s+data\s+remove\b", command):
+        return "./cc data remove"
+    for app in purges:
+        if re.search(rf"(?:^|[\s/'\"])cc\s+run\s+{re.escape(app)}(?:\s|$|['\";&|])", command):
+            return f"./cc run {app}"
+    try:
+        lexer = shlex.shlex(command.replace("\\", "\\\\"), posix=True, punctuation_chars=";&|()<>")
+        lexer.whitespace_split = True
+        words = list(lexer)
+    except ValueError:
+        words = command.split()
+    variables: dict[str, str] = {}
+    groups: list[list[str]] = [[]]
+    for word in words:
+        if word in GROUP_BREAK:
+            groups.append([])
+        else:
+            groups[-1].append(word)
+    for group in groups:
+        while group and group[0] in ("export", "set"):
+            group = group[1:]
+        while group and re.match(r"^[A-Za-z_]\w*=", group[0]):
+            name, value = group[0].split("=", 1)
+            variables[name] = value
+            group = group[1:]
+        group = [re.sub(r"\$\{?([A-Za-z_]\w*)\}?", lambda m: variables.get(m.group(1), os.environ.get(m.group(1), m.group(0))),
+                        word) for word in group]
+        if not group:
+            continue
+        verb = posixpath.basename(group[0].replace("\\", "/")).lower()
+        if verb in ("cmd", "cmd.exe") and len(group) > 2 and group[1].lower() == "/c":
+            group, verb = group[2:], group[2].lower()
+        if verb == "cd" and len(group) > 1:
+            cwd = joined(cwd, group[1])
+            continue
+        operands = [word for word in group[1:] if not word.startswith("-") and not re.fullmatch(r"/[A-Za-z]", word)]
+        redirects = [group[index + 1] for index, word in enumerate(group[:-1]) if word in (">", ">>")]
+        operands = [word for word in operands if word not in (">", ">>", "<") and word not in redirects]
+        for target in redirects:
+            hit = protected_hit(joined(cwd, target), folders)
+            if hit and inside(joined(cwd, target), hit):
+                return hit
+        if verb in DELETE_VERBS:
+            hit = next((found for word in operands if (found := protected_hit(joined(cwd, word), folders))), None)
+            if hit:
+                return hit
+            if any("*" in word or word == "." for word in operands) and protected_hit(cwd, folders):
+                return protected_hit(cwd, folders)
+        if verb in COPY_VERBS and len(operands) >= 2:
+            sources, target = operands[:-1], joined(cwd, operands[-1])
+            if verb in ("mv", "move-item", "move"):
+                hit = next((found for word in sources if (found := protected_hit(joined(cwd, word), folders))), None)
+                if hit:
+                    return hit
+            for source in sources:
+                landing = posixpath.join(target, posixpath.basename(source.rstrip("/"))) \
+                    if operands[-1].endswith("/") or Path(target).is_dir() else target
+                hit = protected_hit(landing, folders)
+                if hit and (not inside(landing, hit) or Path(landing).exists()):
+                    return hit
+        if verb == "find" and ("-delete" in group or any(group[index + 1].lower() in DELETE_VERBS
+                                                           for index, word in enumerate(group[:-1])
+                                                           if word in ("-exec", "-execdir"))):
+            starts = [word for word in group[1:] if not word.startswith(("-", "(", "!"))][:1] or ["."]
+            hit = protected_hit(joined(cwd, starts[0]), folders)
+            if hit:
+                return hit
+        if verb == "rsync" and any(word.startswith("--delete") for word in group) and operands:
+            hit = protected_hit(joined(cwd, operands[-1]), folders)
+            if hit:
+                return hit
+        if verb == "git" and "clean" in group and any(re.fullmatch(r"-[A-Za-z]*[xX][A-Za-z]*", word) for word in group):
+            here = joined(cwd, ".")
+            nested = (joined(str(root), "worktrees"), joined(str(root), "repos"))
+            if inside(here, path_key(str(root))) and not any(inside(here, folder) for folder in nested):
+                return "git clean -x (it removes the ignored .cc-local)"
+        if verb in SHELLS and "-c" in group[1:-1]:
+            hit = destroys_data(group[group.index("-c") + 1], cwd, root, folders, purges)
+            if hit:
+                return hit
+        if verb in INTERPRETERS and DESTRUCTIVE_CODE.search(" ".join(group[1:])):
+            for token in re.findall(r"[\w.~:\\/$-]+", " ".join(group[1:])):
+                hit = protected_hit(joined(cwd, token), folders) if re.search(r"[/\\]", token) else None
+                if hit:
+                    return hit
+    return None
+
+
+def protected_data(command: str, cwd: str, root: Path) -> dict[str, Any] | None:
+    folders, owners, purges = protected(root)
+    if not folders and not purges:
+        return None
+    hit = destroys_data(command, cwd, root, folders, purges)
+    if not hit:
+        return None
+    name = owners.get(hit, "<name>")
+    return pre_tool("deny", f"This would delete, move away or overwrite irreplaceable data ({hit}). Only the user removes "
+                            f"it: tell them to run ./cc data remove {name} in their own terminal, where they type the "
+                            "CC and entry name to confirm. Read-only commands and ./cc backup are fine.")
+
+
 def pre_tool(decision: str, reason: str) -> dict[str, Any]:
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision,
                                    "permissionDecisionReason": reason}}
@@ -125,6 +293,10 @@ def pre_tool(decision: str, reason: str) -> dict[str, Any]:
 
 def pre_bash(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
     command = event.get("tool_input", {}).get("command", "")
+    # First: a deny must not hide behind an earlier ask in the same line (make x; rm -rf ...).
+    guarded = protected_data(command, str(event.get("cwd") or root), root)
+    if guarded:
+        return guarded
     if COMMIT_OR_PR.search(command):
         texts = [command]
         cwd = Path(event.get("cwd") or ".")
@@ -283,7 +455,38 @@ def git_ignored(root: Path, relative: Path) -> bool:
         return False
 
 
+def tag_removal(event: dict[str, Any], root: Path) -> bool:
+    """An edit of control-center.json that drops an irreplaceable tag or entry."""
+    tool_input = event.get("tool_input", {})
+    if "content" in tool_input:
+        def tagged(manifest: Any) -> set[str]:
+            return {entry.get("name") for entry in manifest.get("localData") or []
+                    if isinstance(entry, dict) and "irreplaceable" in (entry.get("tags") or [])}
+        try:
+            current = tagged(json.loads((root / "control-center.json").read_text(encoding="utf-8")))
+        except (OSError, ValueError, AttributeError):
+            return False  # nothing readable is tagged now
+        try:
+            return bool(current - tagged(json.loads(tool_input["content"])))
+        except (ValueError, AttributeError):
+            return bool(current)  # a broken manifest would drop every tag
+    edits = tool_input.get("edits") or [tool_input]
+    return any(str(change.get("old_string", "")).count("irreplaceable") > str(change.get("new_string", "")).count("irreplaceable")
+               for change in edits if isinstance(change, dict))
+
+
 def pre_edit(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
+    raw = event.get("tool_input", {}).get("file_path") or event.get("tool_input", {}).get("notebook_path")
+    if raw:
+        folders, owners, _ = protected(root)
+        hit = protected_hit(joined(str(event.get("cwd") or root), raw), folders)
+        target = joined(str(event.get("cwd") or root), raw)
+        if hit and inside(target, hit):
+            return pre_tool("deny", f"{raw} is irreplaceable data or its mirror; agents never write there. Only the user "
+                                    f"removes or replaces it (./cc data remove {owners.get(hit, '<name>')}).")
+        if target == joined(str(root), "control-center.json") and tag_removal(event, root):
+            return pre_tool("ask", "This edit removes an irreplaceable tag or entry from control-center.json, which ends "
+                                   "its mirror and its delete protection. Allow only if the user asked for exactly that.")
     outside = pre_read(event, root)
     if outside:
         return outside

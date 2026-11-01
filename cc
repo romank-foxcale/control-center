@@ -9,7 +9,9 @@ usage() {
     '' \
     'Commands:' \
     '  doctor [--disk]  Check local prerequisites; --disk shows where disk space goes (read-only)' \
-    '  backup [--to DIR] [--push]  Copy the CC'"'"'s history, uncommitted work and .cc-local state outside the CC (on WSL: to a Windows drive); --push also sends it to the private cc-backup branch' \
+    '  backup [--to DIR] [--push]  Copy the CC'"'"'s history, uncommitted work and .cc-local state outside the CC (on WSL: to a Windows drive); --push also sends it to the private cc-backup branch; irreplaceable localData is mirrored, never pushed' \
+    '  backup where | backup restore <name> [--all]  Where every backup and data mirror is, with links and restore commands; copy a data entry back' \
+    '  data remove <name> [--mirror]  Delete a localData entry (and its mirrors) after you type <cc name>/<name> in your own terminal' \
     '  gc [--apply] [--days N]  Free Nix store space: remove this CC'"'"'s result links, collect old generations (dry run without --apply)' \
     '  relock         Move only the locked nixpkgs to the kit'"'"'s recommended rev, so CCs share Nix store paths' \
     '  show           Show flake packages, checks and apps' \
@@ -93,7 +95,13 @@ case "$command_name" in
     python3 "$cc_root/scripts/repositories.py" "$cc_root" strays || true
     ;;
   backup)
+    case "${1:-}" in
+      where|restore) exec python3 "$cc_root/scripts/backup_where.py" "$cc_root" "$@" ;;
+    esac
     exec python3 "$cc_root/scripts/backup.py" "$cc_root" "$@"
+    ;;
+  data)
+    exec python3 "$cc_root/scripts/data.py" "$cc_root" "$@"
     ;;
   relock)
     require_nix
