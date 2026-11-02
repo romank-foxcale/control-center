@@ -67,14 +67,16 @@ def closure(content: str, lifecycle: str, detail_label: str, detail: str) -> str
     )
     if count != 1:
         raise ValueError("active plan has no unique 'Lifecycle: active' field")
+    block = (
+        "## Lifecycle closure\n\n"
+        + f"- state: {lifecycle}\n"
+        + f"- date: {date.today().isoformat()}\n"
+        + f"- {detail_label}: {detail}\n"
+    )
+    # A function replacement keeps backslashes in the user's detail literal (e.g. a Windows path).
     updated, count = re.subn(
         r"## Lifecycle closure\n\nNot closed\.\s*$",
-        (
-            "## Lifecycle closure\n\n"
-            + f"- state: {lifecycle}\n"
-            + f"- date: {date.today().isoformat()}\n"
-            + f"- {detail_label}: {detail}\n"
-        ),
+        lambda _: block,
         updated,
         count=1,
     )
