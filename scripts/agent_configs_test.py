@@ -31,8 +31,35 @@ def main() -> int:
         assert run(root, "sync").returncode == 0
         synced = json.loads(settings.read_text())
         assert synced["permissions"] == permissions, "sync leaves the permissions alone"
-        assert synced["hooks"]["Stop"][0]["hooks"][0]["command"] == '"$CLAUDE_PROJECT_DIR"/scripts/hook stop'
+        # Every entry runs the shim in shell form and blocks when the hook itself fails (spike S2).
+        expected = {
+            ("PreToolUse", "Bash|PowerShell"): "pre-bash",
+            ("PreToolUse", "Read|Grep|Glob"): "pre-read",
+            ("PreToolUse", "Edit|MultiEdit|Write"): "pre-edit",
+            ("PostToolUse", "Edit|MultiEdit|Write"): "post-edit",
+            ("PostToolUse", "Read|Grep|Glob"): "post-read",
+            ("Stop", None): "stop",
+            ("SessionStart", "startup"): "session-start",
+        }
+        actual = {(event, group.get("matcher")): group["hooks"]
+                  for event, groups in synced["hooks"].items() for group in groups}
+        assert set(actual) == set(expected), sorted(actual, key=str)
+        for key, name in expected.items():
+            assert actual[key] == [{"type": "command", "command": f'"$CLAUDE_PROJECT_DIR/cc" hook {name}',
+                                    "timeout": 15, "onFailure": "block"}], (key, actual[key])
+        assert "scripts/hook" not in settings.read_text(), "the old bash launcher is gone"
         assert run(root, "check").returncode == 0, run(root, "check").stderr
+
+        for field, value in (("onFailure", None), ("timeout", 60), ("command", '"$CLAUDE_PROJECT_DIR"/scripts/hook stop')):
+            changed = json.loads(json.dumps(synced))
+            if value is None:
+                del changed["hooks"]["Stop"][0]["hooks"][0][field]
+            else:
+                changed["hooks"]["Stop"][0]["hooks"][0][field] = value
+            settings.write_text(json.dumps(changed))
+            result = run(root, "check")
+            assert result.returncode == 1 and "hooks differ" in result.stderr, f"a hand-changed {field} is drift"
+        settings.write_text(json.dumps(synced))
 
         synced["hooks"]["PreToolUse"].pop()
         settings.write_text(json.dumps(synced))

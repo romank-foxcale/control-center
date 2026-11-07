@@ -22,8 +22,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hook pre-bash",
-            "timeout": 15
+            "command": "\"$CLAUDE_PROJECT_DIR/cc\" hook pre-bash",
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       },
@@ -32,8 +33,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hook pre-read",
-            "timeout": 15
+            "command": "\"$CLAUDE_PROJECT_DIR/cc\" hook pre-read",
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       },
@@ -42,8 +44,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hook pre-edit",
-            "timeout": 15
+            "command": "\"$CLAUDE_PROJECT_DIR/cc\" hook pre-edit",
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       }
@@ -54,8 +57,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hook post-edit",
-            "timeout": 15
+            "command": "\"$CLAUDE_PROJECT_DIR/cc\" hook post-edit",
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       },
@@ -64,8 +68,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hook post-read",
-            "timeout": 15
+            "command": "\"$CLAUDE_PROJECT_DIR/cc\" hook post-read",
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       }
@@ -75,8 +80,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hook stop",
-            "timeout": 15
+            "command": "\"$CLAUDE_PROJECT_DIR/cc\" hook stop",
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       }
@@ -87,8 +93,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hook session-start",
-            "timeout": 15
+            "command": "\"$CLAUDE_PROJECT_DIR/cc\" hook session-start",
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       }
