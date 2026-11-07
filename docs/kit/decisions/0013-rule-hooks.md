@@ -7,7 +7,7 @@ verified_at: 2026-11-01
 evidence:
   - scripts/rule_hooks.py
   - scripts/rule_hooks_test.py
-  - scripts/hook
+  - scripts/cc.py
   - scripts/agent-configs.py
   - scripts/validate-knowledge.py
   - scripts/verify.py
@@ -31,7 +31,7 @@ The hard rules in `AGENTS.md` were instruction text only. Agents break them when
 
 ## Decision
 
-- `scripts/rule_hooks.py` holds the hook logic; `scripts/hook` runs it with the first working Python (`python3`, `python`, `py -3`), because on native Windows `python3` is often the Store stub.
+- `scripts/rule_hooks.py` holds the hook logic; `cc hook <event>` runs it with the Python pinned in `uv.lock` (plan native-core). Every hook entry sets `onFailure: block`: a gate hook (`pre-*`) that fails or times out blocks the call, and a non-gate hook reports its failure without blocking.
 - `./cc agents sync` owns the `hooks` key of `.claude/settings.json` (every other key stays the user's); `./cc agents check` fails when it was edited by hand.
 - What each hook does and the gate behind it:
 
