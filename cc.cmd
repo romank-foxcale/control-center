@@ -1,10 +1,19 @@
 @echo off
-rem Run this CC's ./cc inside WSL from cmd or PowerShell: cc check, cc verify --quality, ...
-rem Uses the default WSL distribution, or the one named in CC_WSL_DISTRO.
+rem Run the CC on native Windows from cmd or PowerShell: cc check, cc verify, ...
+rem Finds the pinned uv (downloads and checks it on first use), then runs scripts\cc.py with the Python and
+rem dependencies locked in uv.lock. Why: plans/active/native-core.md
 setlocal
-set "distro="
-if defined CC_WSL_DISTRO set "distro=-d %CC_WSL_DISTRO%"
-rem The trailing dot keeps the closing quote from being escaped by the path's last backslash.
-rem bash -l loads the Nix profile; -e passes the arguments to WSL without another shell.
-wsl.exe %distro% --cd "%~dp0." -e bash -lc "exec ./cc \"$@\"" cc %*
+rem The CC root as a clean full path: no trailing backslash to escape a closing quote, no "\." for uv's venv.
+for %%i in ("%~dp0.") do set "ROOT=%%~fi"
+for /f "tokens=2" %%v in ('findstr /b /c:"version " "%ROOT%\.uv-pin"') do set "UVVERSION=%%v"
+set "UV=%ROOT%\.cc-local\tools\uv\%UVVERSION%\uv.exe"
+if not exist "%UV%" (
+  powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ROOT%\scripts\uv-bootstrap.ps1" 1>&2
+  if errorlevel 1 exit /b 1
+)
+set "PYTHONUTF8=1"
+set "UV_PYTHON_PREFERENCE=only-managed"
+set "UV_PYTHON_INSTALL_DIR=%ROOT%\.cc-local\tools\python"
+set "UV_PROJECT_ENVIRONMENT=%ROOT%\.cc-local\venvs\windows"
+"%UV%" run --locked --quiet --project "%ROOT%" python -B "%ROOT%\scripts\cc.py" %*
 exit /b %errorlevel%

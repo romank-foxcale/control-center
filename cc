@@ -1,237 +1,55 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+# Run the CC on Linux, macOS and in Git Bash on Windows: find the pinned uv (download and check it on first use),
+# then run scripts/cc.py with the Python and dependencies locked in uv.lock. Why: plans/active/native-core.md
+set -eu
+root=$(cd "$(dirname "$0")" && pwd)
+version=$(awk '$1 == "version" { print $2 }' "$root/.uv-pin")
+dir="$root/.cc-local/tools/uv/$version"
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) os=windows uv="$dir/uv.exe" ;;
+  Darwin) os=macos uv="$dir/uv" ;;
+  Linux) os=linux uv="$dir/uv" ;;
+  *) echo "cc: unsupported OS $(uname -s)" >&2; exit 1 ;;
+esac
 
-cc_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-
-usage() {
-  printf '%s\n' \
-    'Usage: ./cc <command> [arguments]' \
-    '' \
-    'Commands:' \
-    '  doctor [--disk]  Check local prerequisites; --disk shows where disk space goes (read-only)' \
-    '  backup [--to DIR] [--push]  Copy the CC'"'"'s history, uncommitted work and .cc-local state outside the CC (on WSL: to a Windows drive); --push also sends it to the private cc-backup branch; irreplaceable localData is mirrored, never pushed' \
-    '  backup where | backup restore <name> [--all]  Where every backup and data mirror is, with links and restore commands; copy a data entry back' \
-    '  data remove <name> [--mirror]  Delete a localData entry (and its mirrors) after you type <cc name>/<name> in your own terminal' \
-    '  gc [--apply] [--days N]  Free Nix store space: remove this CC'"'"'s result links, collect old generations (dry run without --apply)' \
-    '  relock         Move only the locked nixpkgs to the kit'"'"'s recommended rev, so CCs share Nix store paths' \
-    '  show           Show flake packages, checks and apps' \
-    '  check          Evaluate and build every flake check' \
-    '  build <name>   Build .#<name>' \
-    '  run <name>     Run .#<name>' \
-    '  verify [repo...] [--quality] [--full]  Run every check plus each catalog target gate (and quality gates)' \
-    '  council <run|approve|reject|status|models|set-role|set> ...  Multi-model councils and their settings' \
-    '  watch [run]    Follow a council or verify run live: steps, agent talk, stalls, result' \
-    '  eval <run|compare|trace|regrade> ...  Measure an agent-context change: headless claude runs, graded, with tokens, cost and time' \
-    '  settings [show]  Settings panel: agents and models, councils, repos; show prints them as text' \
-    '  validate       Validate the Markdown knowledge graph' \
-    '  agents <sync|check>  Mirror .agents/skills into .claude/skills' \
-    '  bootstrap install [target]  Materialize a new CC from this clone' \
-    '  bootstrap validate          Validate the configured CC contract' \
-    '  repo <add|list|show|remove|set-branch|set-remote|set-kind|set-status|set-targets|set-stack|strays> ...' \
-    '  prs [repo...] [--json]  Open pull requests of the catalog repos, newest first, new ones and waiting threads marked' \
-    '  prs show <repo> <n> [--diff] | prs checkout <repo> <n>  One PR for review; its head as feature pr-<repo>-<n>' \
-    '  prs threads|judge <repo> <n> [--all] [--json]  Review threads waiting on you; judge them with anonymous sceptics' \
-    '  prs learn [repo...] [--since YYYY-MM-DD] [--harvest-only] [--json]  Accepted review comments of merged PRs since the last run; the review-learner agent turns them into candidate lessons' \
-    '  worktree <create|add|status|remove> ...' \
-    '  migrate-layout [--dry-run]  Move this CC'"'"'s clones and worktrees from ../repos and ../worktrees into repos/ and worktrees/' \
-    '  trello <status|boards|lists|connect|link|show|comment|move> ...  Trello cards, on demand only' \
-    '  open <feature> [--tool claude|codex]  Start a coding session in the CC with the feature'"'"'s worktrees' \
-    '  plan <create|list|show|accept|archive|complete> ...' \
-    '  feature <name> <show|check|build|run|verify> ...  Use feature input overrides'
-}
-
-require_nix() {
-  if ! command -v nix >/dev/null 2>&1; then
-    printf '%s\n' 'error: Nix is not installed; see https://nixos.org/download/' >&2
+fetch_uv() {
+  case "$(uname -m)" in
+    x86_64 | amd64) arch=x86_64 ;;
+    arm64 | aarch64) arch=aarch64 ;;
+    *) echo "cc: unsupported CPU $(uname -m)" >&2; exit 1 ;;
+  esac
+  case "$os" in
+    macos) asset="uv-$arch-apple-darwin.tar.gz" ;;
+    linux) asset="uv-$arch-unknown-linux-gnu.tar.gz" ;;
+  esac
+  expected=$(awk -v a="$asset" '$1 == a { print $2 }' "$root/.uv-pin")
+  [ -n "$expected" ] || { echo "cc: no pinned hash for $asset in .uv-pin" >&2; exit 1; }
+  temp=$(mktemp -d)
+  trap 'rm -rf "$temp"' EXIT
+  url="https://github.com/astral-sh/uv/releases/download/$version/$asset"
+  echo "cc: downloading uv $version ($asset)" >&2
+  if command -v curl >/dev/null 2>&1; then curl -fsSL -o "$temp/$asset" "$url"; else wget -q -O "$temp/$asset" "$url"; fi
+  if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$temp/$asset" | cut -d' ' -f1)
+  else actual=$(shasum -a 256 "$temp/$asset" | cut -d' ' -f1); fi
+  if [ "$actual" != "$expected" ]; then
+    echo "cc: SHA-256 mismatch for $asset: expected $expected, got $actual" >&2
     exit 1
   fi
+  tar -xzf "$temp/$asset" -C "$temp"
+  mkdir -p "$dir"
+  mv "$temp/${asset%.tar.gz}/uv" "$uv.part"
+  chmod +x "$uv.part"
+  mv "$uv.part" "$uv"
 }
 
-# Write or refresh flake.lock before evaluating: when an evaluation creates the lock
-# itself, Nix sees the source tree change mid-evaluation and aborts.
-lock_flake() {
-  nix flake lock "$cc_root" --quiet
-}
-
-nix_override_args=()
-load_feature_overrides() {
-  if [[ -z "${CC_FEATURE:-}" ]]; then
-    return
+if [ ! -x "$uv" ]; then
+  if [ "$os" = windows ]; then
+    powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$(cygpath -w "$root/scripts/uv-bootstrap.ps1")" >&2
+  else
+    fetch_uv
   fi
-  override_output="$(python3 "$cc_root/scripts/worktrees.py" "$cc_root" nix-args "$CC_FEATURE")"
-  if [[ -n "$override_output" ]]; then
-    while IFS= read -r argument; do
-      nix_override_args+=("$argument")
-    done <<< "$override_output"
-  fi
-}
-
-command_name="${1:-help}"
-if [[ $# -gt 0 ]]; then
-  shift
 fi
 
-case "$command_name" in
-  doctor)
-    require_nix
-    # Read-only, and never locks the flake. Why: docs/kit/decisions/0030-disk-management.md
-    if [[ "${1:-}" == "--disk" ]]; then
-      exec python3 "$cc_root/scripts/disk.py" "$cc_root"
-    fi
-    nix --version
-    if command -v docker >/dev/null 2>&1; then
-      docker --version
-    elif command -v podman >/dev/null 2>&1; then
-      podman --version
-    else
-      printf '%s\n' 'note: Docker/Podman is absent; container E2E apps will be unavailable'
-    fi
-    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-      printf '%s\n' 'gh: logged in'
-    else
-      printf '%s\n' 'note: gh is missing or not logged in; ./cc prs will be unavailable'
-    fi
-    python3 "$cc_root/scripts/council/providers.py" status
-    python3 "$cc_root/scripts/repositories.py" "$cc_root" strays || true
-    ;;
-  backup)
-    case "${1:-}" in
-      where|restore) exec python3 "$cc_root/scripts/backup_where.py" "$cc_root" "$@" ;;
-    esac
-    exec python3 "$cc_root/scripts/backup.py" "$cc_root" "$@"
-    ;;
-  data)
-    exec python3 "$cc_root/scripts/data.py" "$cc_root" "$@"
-    ;;
-  relock)
-    require_nix
-    exec python3 "$cc_root/scripts/relock.py" "$cc_root"
-    ;;
-  gc)
-    require_nix
-    # Never touches .cc-local. Why: docs/kit/decisions/0030-disk-management.md
-    exec python3 "$cc_root/scripts/store_gc.py" "$cc_root" "$@"
-    ;;
-  show)
-    require_nix
-    lock_flake
-    load_feature_overrides
-    exec nix flake show "${nix_override_args[@]}" "$cc_root" "$@"
-    ;;
-  check)
-    require_nix
-    lock_flake
-    load_feature_overrides
-    status=0
-    nix flake check "${nix_override_args[@]}" "$cc_root" --keep-going "$@" || status=$?
-    # A pass stamps the CC's tree, which the push hook looks for. Why: docs/kit/decisions/0028-verify-before-push.md
-    if [[ "$status" -eq 0 ]] && command -v python3 >/dev/null; then
-      python3 "$cc_root/scripts/verified.py" "$cc_root" record "$cc_root" check
-    fi
-    # Notes whose evidence changed after verified_at: a warning, never a failure. It needs the Git history, which
-    # the Nix sandbox lacks. Why: docs/kit/decisions/0023-stale-evidence-warning.md
-    if command -v python3 >/dev/null; then
-      python3 "$cc_root/scripts/validate-knowledge.py" --stale "$cc_root" || true
-    fi
-    exit "$status"
-    ;;
-  build)
-    require_nix
-    lock_flake
-    target="${1:?usage: ./cc build <name>}"
-    shift
-    load_feature_overrides
-    exec nix build "${nix_override_args[@]}" "${cc_root}#$target" "$@"
-    ;;
-  run)
-    require_nix
-    lock_flake
-    target="${1:?usage: ./cc run <name>}"
-    shift
-    load_feature_overrides
-    exec nix run "${nix_override_args[@]}" "${cc_root}#$target" -- "$@"
-    ;;
-  verify)
-    require_nix
-    lock_flake
-    exec python3 "$cc_root/scripts/verify.py" "$cc_root" "$@"
-    ;;
-  validate)
-    exec python3 "$cc_root/scripts/validate-knowledge.py" "$cc_root"
-    ;;
-  agents)
-    exec python3 "$cc_root/scripts/agent-configs.py" "$cc_root" "${1:-check}"
-    ;;
-  bootstrap)
-    bootstrap_command="${1:-help}"
-    if [[ $# -gt 0 ]]; then
-      shift
-    fi
-    case "$bootstrap_command" in
-      install)
-        exec python3 "$cc_root/scripts/materialize-template.py" "${1:-.}"
-        ;;
-      validate)
-        exec python3 "$cc_root/scripts/validate-control-center.py" "$cc_root"
-        ;;
-      *)
-        printf '%s\n' 'usage: ./cc bootstrap <install [target]|validate>' >&2
-        exit 2
-        ;;
-    esac
-    ;;
-  repo)
-    exec python3 "$cc_root/scripts/repositories.py" "$cc_root" "$@"
-    ;;
-  prs)
-    exec python3 "$cc_root/scripts/prs.py" "$cc_root" "$@"
-    ;;
-  worktree)
-    exec python3 "$cc_root/scripts/worktrees.py" "$cc_root" "$@"
-    ;;
-  migrate-layout)
-    exec python3 "$cc_root/scripts/migrate_layout.py" "$cc_root" "$@"
-    ;;
-  trello)
-    exec python3 "$cc_root/scripts/trello.py" "$cc_root" "$@"
-    ;;
-  open)
-    exec python3 "$cc_root/scripts/worktrees.py" "$cc_root" open "$@"
-    ;;
-  watch)
-    exec python3 "$cc_root/scripts/events.py" "$cc_root" "$@"
-    ;;
-  council)
-    exec python3 "$cc_root/scripts/council/run.py" "$cc_root" "$@"
-    ;;
-  eval)
-    require_nix
-    exec python3 "$cc_root/scripts/eval/run.py" "$cc_root" "$@"
-    ;;
-  settings)
-    require_nix
-    lock_flake
-    exec nix run "$cc_root#settings" -- "$cc_root" "$@"
-    ;;
-  plan)
-    exec python3 "$cc_root/scripts/plans.py" "$cc_root" "$@"
-    ;;
-  feature)
-    feature_name="${1:?usage: ./cc feature <name> <show|check|build|run|verify> [arguments]}"
-    shift
-    if [[ $# -eq 0 ]]; then
-      printf '%s\n' 'error: feature requires a command' >&2
-      exit 2
-    fi
-    export CC_FEATURE="$feature_name"
-    exec "$cc_root/cc" "$@"
-    ;;
-  help|-h|--help)
-    usage
-    ;;
-  *)
-    printf 'error: unknown command: %s\n' "$command_name" >&2
-    usage >&2
-    exit 2
-    ;;
-esac
+export PYTHONUTF8=1 UV_PYTHON_PREFERENCE=only-managed
+export UV_PYTHON_INSTALL_DIR="$root/.cc-local/tools/python" UV_PROJECT_ENVIRONMENT="$root/.cc-local/venvs/$os"
+exec "$uv" run --locked --quiet --project "$root" python -B "$root/scripts/cc.py" "$@"

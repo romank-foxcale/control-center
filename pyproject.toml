@@ -1,0 +1,12 @@
+# The CC core's Python environment, run by the cc / cc.cmd shims through uv (plan native-core).
+# Not a package: the scripts run from scripts/; uv.lock pins every dependency.
+[project]
+name = "control-center"
+version = "0.0.0"
+requires-python = "==3.14.*"
+dependencies = [
+  "textual>=6",
+]
+
+[tool.uv]
+package = false
