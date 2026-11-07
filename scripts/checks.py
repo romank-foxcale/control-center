@@ -91,9 +91,13 @@ def run_group(group: Group, root: Path = ROOT) -> Result:
             argv = [sys.executable, "-B", str(root / script),
                     *(str(root) if argument == ROOT_ARGUMENT else argument for argument in arguments)]
             try:
+                # On Windows each step gets its own hidden console: a test that calls os.kill(pid, 0) there sends
+                # CTRL_C_EVENT to the whole console and would otherwise stop ./cc check itself. Elsewhere the flag
+                # does not exist and is 0.
                 completed = subprocess.run(argv, cwd=root / group.cwd, env=environment, stdin=subprocess.DEVNULL,
                                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                           encoding="utf-8", errors="replace")
+                                           encoding="utf-8", errors="replace",
+                                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             except OSError as error:
                 output.append(f"$ {script}: {error}\n")
                 status = "FAIL"
