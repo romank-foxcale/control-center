@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Run every flake check, then the gate of each catalog target (and, with --quality, each quality gate)."""
+"""Run every CC check, then the gate of each catalog target (and, with --quality, each quality gate).
+
+The checks are the native ones of ./cc check (scripts/checks.py), plus nix flake check when Nix is installed. Target
+and quality gates are Nix-defined until project adapters get a native backend (plan native-core, milestone 2), so
+without Nix a declared gate has no runnable backend on this host and FAILs: a missing gate is never a pass (risk K1).
+A pass stamps each tested tree only when it is the same at the end as at the start, so an edit made while verify ran
+is never covered by the stamp. Why: docs/kit/decisions/0028-verify-before-push.md
+"""
 
 from __future__ import annotations
 
@@ -15,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import events
+import hostos
 import repositories as repositories_catalog
 import verified
 from rule_hooks import attributed_commits
@@ -23,6 +31,7 @@ from rule_hooks import attributed_commits
 # Must match supportedQualityGates in nix/lib/default.nix.
 QUALITY_GATES = ("mutation",)
 WARN = "WARN: no gate"
+NO_BACKEND = "FAIL: no runnable gate on this host; Nix-defined gates need the optional Nix extra"
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -149,17 +158,22 @@ def run_verify(root: Path, args: argparse.Namespace, live: Gates) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
-    results: list[tuple[str, str, str]] = []
-    print("== flake checks")
-    flake_check = live.run("flake checks", ["nix", "flake", "check", *overrides, str(root), "--keep-going"])
-    results.append(("cc", "all checks", "pass" if flake_check == 0 else "FAIL"))
+    nix_found = hostos.resolve_exe("nix") is not None
+    started = tree_snapshot(tested_paths(root, feature, [repository["id"] for repository in repositories]))
 
-    system = nix("eval", "--impure", "--raw", "--expr", "builtins.currentSystem", capture=True).stdout.strip()
-    evaluated = nix("eval", "--json", *overrides, f"{root}#legacyPackages.{system}.ccTargets", capture=True)
-    if evaluated.returncode != 0:
-        print(evaluated.stderr, file=sys.stderr)
-        return 1
-    gates: dict[str, dict[str, str]] = json.loads(evaluated.stdout)
+    results: list[tuple[str, str, str]] = []
+    print("== checks (native, then nix flake check when Nix is installed)")
+    checks = live.run("checks", [sys.executable, "-B", str(root / "scripts" / "checks.py")])
+    results.append(("cc", "all checks", "pass" if checks == 0 else "FAIL"))
+
+    system, gates = "", {}
+    if nix_found:
+        system = nix("eval", "--impure", "--raw", "--expr", "builtins.currentSystem", capture=True).stdout.strip()
+        evaluated = nix("eval", "--json", *overrides, f"{root}#legacyPackages.{system}.ccTargets", capture=True)
+        if evaluated.returncode != 0:
+            print(evaluated.stderr, file=sys.stderr)
+            return 1
+        gates = json.loads(evaluated.stdout)
 
     for repository in repositories:
         identifier = repository["id"]
@@ -168,6 +182,9 @@ def run_verify(root: Path, args: argparse.Namespace, live: Gates) -> int:
             results.append((identifier, "-", f"FAIL: no targets; run ./cc repo set-targets {identifier} <target>..."))
             continue
         for target in targets:
+            if not nix_found:
+                results.append((identifier, target, NO_BACKEND))
+                continue
             kind = gates.get(identifier, {}).get(target)
             # A bare .#name resolves only packages and apps; checks need their full path.
             name = f"{identifier}-target-{target}"
@@ -183,28 +200,54 @@ def run_verify(root: Path, args: argparse.Namespace, live: Gates) -> int:
     results.extend(attribution_results(root, feature))
 
     if args.quality:
-        results.extend(run_quality(root, feature, overrides, system, repositories, live))
+        if nix_found:
+            results.extend(run_quality(root, feature, overrides, system, repositories, live))
+        else:
+            results.extend((repository["id"], gate, NO_BACKEND) for repository in repositories for gate in QUALITY_GATES)
 
     if not repositories:
-        print("note: no catalog repositories selected; only the flake checks ran")
+        print("note: no catalog repositories selected; only the CC checks ran")
     print("\nREPO\tGATE\tRESULT")
     for row in results:
         print("\t".join(row))
     if not all(result in {"pass", WARN} for _, _, result in results):
         return 1
-    stamp_trees(root, feature, [repository["id"] for repository in repositories])
+    stamp_trees(root, started)
     return 0
 
 
-def stamp_trees(root: Path, feature: str | None, identifiers: list[str]) -> None:
-    """Record the trees this passing run tested, for the push hook (docs/kit/decisions/0028-verify-before-push.md)."""
+def tested_paths(root: Path, feature: str | None, identifiers: list[str]) -> list[Path]:
+    """The CC and the selected repositories' feature worktrees: the trees a passing run covers."""
     worktrees = feature_worktrees(root, feature)
-    paths = [root] + [Path(worktrees[identifier]["CC_WORKTREE"]) for identifier in identifiers if identifier in worktrees]
+    return [root] + [Path(worktrees[identifier]["CC_WORKTREE"]) for identifier in identifiers if identifier in worktrees]
+
+
+def tree_snapshot(paths: list[Path]) -> dict[Path, str | None]:
+    """Each path's tree as it is on disk now; None when it cannot be read, which later means no stamp."""
+    trees: dict[Path, str | None] = {}
     for path in paths:
         try:
-            verified.record(root, path, "verify")
-        except (OSError, subprocess.CalledProcessError) as error:
-            print(f"warning: no verify stamp for {path}: {error}", file=sys.stderr)
+            trees[path] = verified.working_tree(path)
+        except (OSError, subprocess.CalledProcessError):
+            trees[path] = None
+    return trees
+
+
+def stamp_trees(root: Path, started: dict[Path, str | None]) -> None:
+    """Record the trees this passing run tested, for the push hook, only where the tree did not change during the run.
+
+    Why: docs/kit/decisions/0028-verify-before-push.md
+    """
+    for path, tree in tree_snapshot(list(started)).items():
+        if tree is None or started[path] is None:
+            print(f"warning: no verify stamp for {path}: its tree cannot be read", file=sys.stderr)
+        elif tree != started[path]:
+            print(f"warning: no verify stamp for {path}: files changed while verify ran; run it again", file=sys.stderr)
+        else:
+            try:
+                verified.record(root, path, "verify", tree=tree)
+            except (OSError, subprocess.CalledProcessError) as error:
+                print(f"warning: no verify stamp for {path}: {error}", file=sys.stderr)
 
 
 def run_quality(

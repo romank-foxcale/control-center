@@ -225,7 +225,9 @@ def command_add(root: Path, args: argparse.Namespace) -> None:
 def stray_clones(root: Path) -> list[str]:
     """Folders in this CC's repos/ that its catalog does not list: a clone nobody declared is out of scope
     (docs/kit/decisions/0016-per-cc-repos-and-worktrees.md). Nix checks cannot see the ignored folder, so verify
-    and doctor ask this instead."""
+    and doctor ask this instead. The kit template has no control-center.json and no clones, so no strays."""
+    if not (root / "control-center.json").is_file():
+        return []
     _, repositories_root = layout(root)
     if not repositories_root.is_dir():
         return []

@@ -15,7 +15,6 @@ import shutil
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
@@ -46,16 +45,8 @@ def load_json(path: Path) -> dict[str, Any]:
 def write_json(path: Path, data: dict[str, Any]) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    # Windows refuses to replace a file that another process holds open for a moment (a reader such as
-    # ./cc settings, a virus scanner); that is access denied, not a lasting error. Elsewhere rename never waits.
-    for attempt in range(50):
-        try:
-            temporary.replace(path)
-            return
-        except PermissionError:
-            if attempt == 49:
-                raise
-            time.sleep(0.1)
+    # A reader such as ./cc settings can hold the file open for a moment on Windows.
+    hostos.rename(temporary, path, replace=True)
 
 
 def say(message: str) -> None:

@@ -26,6 +26,7 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -195,6 +196,26 @@ def write_protect(folder: str | os.PathLike[str], read_only: bool, keep: str = "
     if kept.exists():
         _icacls(str(kept), "/remove:g", grant.split(":")[0])
     _writable_modes(folder, keep, read_only=False)
+
+
+def rename(source: str | os.PathLike[str], destination: str | os.PathLike[str], *, replace: bool = False,
+           seconds: float = 5.0) -> None:
+    """os.rename (os.replace with replace=True) that waits out a short Windows sharing denial.
+
+    A virus scanner, the search indexer or a reader holds a file or folder that was just written open for a moment,
+    and Windows then refuses the rename with access denied (WinError 5). That is not a lasting error, so the call is
+    tried again for up to `seconds`. Elsewhere a PermissionError is real and raised at once.
+    """
+    move = os.replace if replace else os.rename
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            move(source, destination)
+            return
+        except PermissionError:
+            if not WINDOWS or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
 
 
 def rmtree(path: str | os.PathLike[str], ignore_errors: bool = False) -> None:

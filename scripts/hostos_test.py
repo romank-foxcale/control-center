@@ -11,6 +11,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import hostos  # noqa: E402
@@ -131,6 +132,44 @@ class LongPath(unittest.TestCase):
 
     def test_the_temp_folder_has_no_short_names(self) -> None:
         self.assertNotIn("~", str(hostos.long_path(tempfile.gettempdir())))
+
+
+class Rename(unittest.TestCase):
+    def denied_twice(self) -> tuple[list[tuple[str, str]], object]:
+        calls: list[tuple[str, str]] = []
+
+        def flaky(source: str, destination: str) -> None:
+            calls.append((source, destination))
+            if len(calls) <= 2:
+                raise PermissionError(13, "Access is denied")
+        return calls, flaky
+
+    def test_windows_waits_out_a_short_denial(self) -> None:
+        calls, flaky = self.denied_twice()
+        with mock.patch.object(hostos, "WINDOWS", True), mock.patch.object(hostos.os, "replace", flaky):
+            hostos.rename("a", "b", replace=True)
+        self.assertEqual(calls, [("a", "b")] * 3)
+
+    def test_a_lasting_denial_is_raised(self) -> None:
+        with mock.patch.object(hostos, "WINDOWS", True), \
+                mock.patch.object(hostos.os, "rename", side_effect=PermissionError(13, "Access is denied")):
+            with self.assertRaises(PermissionError):
+                hostos.rename("a", "b", seconds=0.3)
+
+    def test_elsewhere_a_denial_is_raised_at_once(self) -> None:
+        calls, flaky = self.denied_twice()
+        with mock.patch.object(hostos, "WINDOWS", False), mock.patch.object(hostos.os, "rename", flaky):
+            with self.assertRaises(PermissionError):
+                hostos.rename("a", "b")
+        self.assertEqual(len(calls), 1)
+
+    def test_it_renames_a_real_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / ".partial"
+            (source / "inner").mkdir(parents=True)
+            hostos.rename(source, Path(temporary) / "final")
+            self.assertTrue((Path(temporary) / "final" / "inner").is_dir())
+            self.assertFalse(source.exists())
 
 
 class CcCommand(unittest.TestCase):

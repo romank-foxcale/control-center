@@ -3,12 +3,15 @@ id: kit.rules.executable-processes
 title: Executable processes
 status: active
 summary: All knowledge about building, testing, packaging and running is expressed as Nix outputs.
-verified_at: 2026-10-15
+verified_at: 2026-11-08
 evidence:
   - flake.nix
   - nix/lib/default.nix
   - nix/workflows/default.nix
   - templates/project.nix
+  - scripts/cc.py
+  - scripts/checks.py
+  - scripts/verify.py
 relations:
   - docs/kit/architecture/control-center.md
   - docs/kit/rules/project-adapters.md
@@ -34,6 +37,24 @@ relations:
 - A command found during diagnosis does not count as knowledge until it is expressed in Nix.
 - Networked, interactive and privileged actions are never disguised as pure checks.
 - Markdown may explain the goal and the trade-off, but it is not a build runbook.
+
+## Commands on each host
+
+The CC core runs natively through uv on every OS; Nix is an optional extra (plan native-core). `scripts/cc_test.py` and
+`scripts/verify_test.py` assert the rows that differ.
+
+| Command | Windows, macOS or Linux without Nix | Linux or macOS with Nix |
+|---|---|---|
+| `check` | The native check groups; the `nix extra` row says `not run` | The native groups, then `nix flake check` |
+| `verify` | The native checks; every declared target or quality gate is `FAIL` (no runnable backend), so no stamp | The checks with `nix flake check`, then each Nix gate |
+| `show` | The check groups | The check groups, then `nix flake show` |
+| `build`, `run`, `relock`, `gc`, `eval` | Exit 1: "needs the optional Nix extra" | Run through Nix |
+| `doctor` | uv, Python, git, Git Bash (Windows), agent CLIs; Nix is a note | The same, with the Nix version |
+| Every other command | Native | Native |
+
+- A `check` or `verify` stamp names the tree from the start of the run, and only when the tree is the same at the end.
+- `doctor` warns about a CC on a Windows drive seen from WSL (`/mnt/c`): a rule hook there is slower than its timeout.
+- The one test skipped on Windows outside the Nix extra is `store_gc_test.py`, because `gc` needs Nix.
 
 ## Example
 

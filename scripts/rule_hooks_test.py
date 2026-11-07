@@ -532,10 +532,18 @@ def check_protected_data(base: Path) -> None:
     (root / "control-center.json").write_text("{broken", encoding="utf-8")
     assert run(f"rm -rf {mirror}") == "deny", "the locations file still protects the mirror"
 
-    started = time.monotonic()
-    for _ in range(100):
-        run("ls -la .cc-local/data/emb && rm -rf /tmp/x")
-    assert time.monotonic() - started < 5, "the hook must stay fast: no subprocess per call"
+    # The hook must stay fast: no subprocess per call. Counted, not timed: a parallel ./cc check loads the machine
+    # enough on Windows to push 100 in-process calls past a tight wall-clock limit.
+    def no_subprocess(*arguments: object, **keywords: object) -> None:
+        raise AssertionError(f"the hook started a subprocess: {arguments[:1]}")
+    started, real_popen = time.monotonic(), subprocess.Popen
+    subprocess.Popen = no_subprocess  # type: ignore[assignment,misc]
+    try:
+        for _ in range(100):
+            run("ls -la .cc-local/data/emb && rm -rf /tmp/x")
+    finally:
+        subprocess.Popen = real_popen  # type: ignore[misc]
+    assert time.monotonic() - started < 30, "100 hook calls took over 30 s"
 
 
 def main() -> int:

@@ -93,11 +93,42 @@ class WithoutNix(unittest.TestCase):
     def test_nix_commands_fail_clearly(self) -> None:
         real_which = shutil.which
         with mock.patch.object(cc.shutil, "which", side_effect=lambda name: None if name == "nix" else real_which(name)):
-            # check runs natively without Nix (scripts/checks.py); running it here would recurse into this test.
-            for argv in (("show",), ("build", "x"), ("run", "x"), ("verify",), ("relock",), ("gc",)):
+            # check and verify run natively without Nix (scripts/checks.py); running them here would recurse into this
+            # test. show without arguments lists the check groups; with flake arguments it needs Nix.
+            for argv in (("show", "--json"), ("build", "x"), ("run", "x"), ("relock",), ("gc",), ("eval", "run")):
                 code, _, err = run(*argv)
                 self.assertEqual(code, 1, argv)
                 self.assertIn("needs the optional Nix extra", err, argv)
+
+
+    def test_show_lists_the_check_groups_without_nix(self) -> None:
+        real_which = shutil.which
+        with mock.patch.object(cc.shutil, "which", side_effect=lambda name: None if name == "nix" else real_which(name)):
+            code, out, _ = run("show")
+        self.assertEqual(code, 0)
+        self.assertIn("  core: hostos_test.py, cc_test.py, checks_test.py", out)
+        self.assertIn("optional Nix extra", out)
+
+    def test_verify_runs_without_nix_and_never_locks(self) -> None:
+        real_which = shutil.which
+        with mock.patch.object(cc.shutil, "which", side_effect=lambda name: None if name == "nix" else real_which(name)), \
+                mock.patch.object(cc, "script", return_value=0) as called, mock.patch.object(cc, "lock_flake") as lock:
+            self.assertEqual(run("verify", "api")[0], 0)
+        called.assert_called_once_with("verify.py", "api")
+        lock.assert_not_called()
+
+
+class Doctor(unittest.TestCase):
+    def test_a_cc_on_a_windows_drive_in_wsl_is_flagged(self) -> None:
+        with mock.patch.object(cc.sys, "platform", "linux"), \
+                mock.patch.object(cc.platform, "release", return_value="6.6.87.2-microsoft-standard-WSL2"):
+            self.assertTrue(cc.wsl_on_windows_drive(Path("/mnt/c/Users/me/cc")))
+            self.assertFalse(cc.wsl_on_windows_drive(Path("/home/me/cc")))
+        with mock.patch.object(cc.sys, "platform", "linux"), mock.patch.object(cc.platform, "release", return_value="6.8.0-45-generic"):
+            self.assertFalse(cc.wsl_on_windows_drive(Path("/mnt/c/Users/me/cc")))
+
+    def test_uv_is_found(self) -> None:
+        self.assertIsNotNone(cc.uv_binary(), "the shim ran this test through uv")
 
 
 class Forwarding(unittest.TestCase):

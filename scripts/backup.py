@@ -162,7 +162,7 @@ def data_root(manifest: dict, base: Path, env: dict[str, str], runner: Runner) -
 def write_json(path: Path, value: dict) -> None:
     temporary = path.with_name(f".{path.name}.cc-tmp")
     temporary.write_text(json.dumps(value, indent=1), encoding="utf-8")
-    os.replace(temporary, path)
+    hostos.rename(temporary, path, replace=True)
 
 
 def same_file(source: os.stat_result, target: Path) -> bool:
@@ -224,7 +224,7 @@ def mirror(root: Path, entry: dict, folder: Path, stamp: str, env: dict[str, str
             shutil.copy2(source / name, temporary)
             for attempt in range(5):  # Defender or the indexer may hold the target for a moment
                 try:
-                    os.replace(temporary, destination_file)
+                    hostos.rename(temporary, destination_file, replace=True)
                     break
                 except PermissionError:
                     if attempt == 4:
@@ -364,7 +364,7 @@ def main(argv: list[str], env: dict[str, str] | None = None, runner: Runner = ru
         print(f"error: backup failed, earlier backups are unchanged: {str(detail).strip()}", file=out)
         return 1
     final = folder / stamp
-    partial.rename(final)
+    hostos.rename(partial, final)
     keep = (manifest.get("backup") or {}).get("keep", 5)
     removed = prune(folder, keep)
 

@@ -2,8 +2,9 @@
 """The CC's command line, on Windows, macOS and Linux. The cc / cc.cmd shims run it with the pinned Python from
 uv.lock (plan native-core). Every command keeps the name, arguments and exit codes of the former bash ./cc.
 
-Commands that still need Nix (show, check, build, run, verify, relock, gc, eval) call it when it is installed and
-fail with a clear message when it is not; later work packages give check, verify and show a native backend.
+check, verify and show run natively and add their Nix part when Nix is installed. build, run, relock, gc and eval
+belong to the optional Nix extra and fail with a clear message without it. The command x OS table is in
+docs/kit/rules/executable-processes.md.
 """
 
 from __future__ import annotations
@@ -25,16 +26,16 @@ Commands:
   backup [--to DIR] [--push]  Copy the CC's history, uncommitted work and .cc-local state outside the CC (on WSL: to a Windows drive); --push also sends it to the private cc-backup branch; irreplaceable localData is mirrored, never pushed
   backup where | backup restore <name> [--all]  Where every backup and data mirror is, with links and restore commands; copy a data entry back
   data remove <name> [--mirror]  Delete a localData entry (and its mirrors) after you type <cc name>/<name> in your own terminal
-  gc [--apply] [--days N]  Free Nix store space: remove this CC's result links, collect old generations (dry run without --apply)
-  relock         Move only the locked nixpkgs to the kit's recommended rev, so CCs share Nix store paths
-  show           Show flake packages, checks and apps
-  check          Evaluate and build every flake check
-  build <name>   Build .#<name>
-  run <name>     Run .#<name>
+  gc [--apply] [--days N]  (Nix extra) Free Nix store space: remove this CC's result links, collect old generations (dry run without --apply)
+  relock         (Nix extra) Move only the locked nixpkgs to the kit's recommended rev, so CCs share Nix store paths
+  show           Show the check groups and, with Nix, the flake packages, checks and apps
+  check          Run every CC check, plus nix flake check when Nix is installed
+  build <name>   (Nix extra) Build .#<name>
+  run <name>     (Nix extra) Run .#<name>
   verify [repo...] [--quality] [--full]  Run every check plus each catalog target gate (and quality gates)
   council <run|approve|reject|status|models|set-role|set> ...  Multi-model councils and their settings
   watch [run]    Follow a council or verify run live: steps, agent talk, stalls, result
-  eval <run|compare|trace|regrade> ...  Measure an agent-context change: headless claude runs, graded, with tokens, cost and time
+  eval <run|compare|trace|regrade> ...  (Nix extra) Measure an agent-context change: headless claude runs, graded, with tokens, cost and time
   settings [show]  Settings panel: agents and models, councils, repos; show prints them as text
   validate       Validate the Markdown knowledge graph
   agents <sync|check>  Mirror .agents/skills into .claude/skills
@@ -126,11 +127,33 @@ def git_bash(git: str | None) -> bool:
     return any(candidate and Path(candidate).is_file() for candidate in candidates)
 
 
+def uv_binary() -> str | None:
+    """The uv that runs this CLI: uv run names itself in $UV; else the pinned copy the shim downloads."""
+    if os.environ.get("UV") and Path(os.environ["UV"]).is_file():
+        return os.environ["UV"]
+    pin = (ROOT / ".uv-pin").read_text(encoding="utf-8").split()
+    version = pin[pin.index("version") + 1] if "version" in pin else ""
+    local = ROOT / ".cc-local" / "tools" / "uv" / version / ("uv.exe" if os.name == "nt" else "uv")
+    return str(local) if version and local.is_file() else shutil.which("uv")
+
+
+def wsl_on_windows_drive(root: Path = ROOT) -> bool:
+    """A CC on a Windows drive (/mnt/c) seen from WSL: every file access crosses 9P, and a hook takes 13-24 s."""
+    return sys.platform == "linux" and "microsoft" in platform.release().lower() and root.parts[1:2] == ("mnt",)
+
+
 def doctor(arguments: list[str]) -> int:
     # Read-only, and never locks the flake. Why: docs/kit/decisions/0030-disk-management.md
     if arguments[:1] == ["--disk"]:
         return script("disk.py")
+    sys.stdout.reconfigure(line_buffering=True)  # keep this order with the output of the scripts called below
+    uv = uv_binary()
+    print(subprocess.run([uv, "--version"], capture_output=True, text=True).stdout.strip() if uv
+          else "warning: uv is not found; run the CC through ./cc or cc.cmd, which install the pinned uv")
     print(f"python {platform.python_version()} ({sys.executable})")
+    if wsl_on_windows_drive():
+        print("warning: this CC is on a Windows drive and runs in WSL; a rule hook takes longer than its 15 s timeout "
+              "here, so Claude Code blocks every tool call. Use cc.cmd on Windows, or clone the CC inside WSL (~/...).")
     git = shutil.which("git")
     print(subprocess.run([git, "--version"], capture_output=True, text=True).stdout.strip() if git
           else "error: git is missing; the CC needs it")
@@ -156,15 +179,36 @@ def doctor(arguments: list[str]) -> int:
 def check(arguments: list[str]) -> int:
     # The native check groups, then nix flake check as an optional extra that gets the arguments. Why: plan native-core
     import checks
+    import verify
 
+    started = verify.tree_snapshot([ROOT])
     status = checks.main(arguments, ROOT)
-    # A pass stamps the CC's tree, which the push hook looks for. Why: docs/kit/decisions/0028-verify-before-push.md
+    # A pass stamps the CC's tree, which the push hook looks for, only if no file changed during the run.
+    # Why: docs/kit/decisions/0028-verify-before-push.md
     if status == 0:
-        script("verified.py", "record", str(ROOT), "check")
+        tree = verify.tree_snapshot([ROOT])[ROOT]
+        if tree is None or tree != started[ROOT]:
+            print("warning: no check stamp: files changed while check ran (or the tree cannot be read); run it again",
+                  file=sys.stderr)
+        else:
+            script("verified.py", "record", str(ROOT), "check")
     # Notes whose evidence changed after verified_at: a warning, never a failure.
     # Why: docs/kit/decisions/0023-stale-evidence-warning.md
     subprocess.run([sys.executable, str(SCRIPTS / "validate-knowledge.py"), "--stale", str(ROOT)])
     return status
+
+
+def show(arguments: list[str]) -> int:
+    import checks
+
+    print("Check groups (./cc check):")
+    for group in checks.registry(ROOT):
+        print(f"  {group.name}: {', '.join(Path(step[0]).name for step in group.steps)}")
+    if shutil.which("nix") is None:
+        print("note: Nix is absent; flake packages, apps and Nix gates belong to the optional Nix extra")
+        return 0 if not arguments else nix("flake", "show")  # flake arguments need Nix: fail clearly
+    print("\nFlake outputs (Nix extra):", flush=True)
+    return nix("flake", "show", *feature_overrides(), str(ROOT), *arguments)
 
 
 def bootstrap(arguments: list[str]) -> int:
@@ -202,7 +246,7 @@ def main(argv: list[str]) -> int:
             # Never touches .cc-local. Why: docs/kit/decisions/0030-disk-management.md
             return script("store_gc.py", *arguments)
         if command == "show":
-            return nix("flake", "show", *feature_overrides(), str(ROOT), *arguments)
+            return show(arguments)
         if command == "check":
             return check(arguments)
         if command == "build":
@@ -212,7 +256,8 @@ def main(argv: list[str]) -> int:
             name, rest = target(arguments, "run")
             return nix("run", *feature_overrides(), f"{ROOT}#{name}", "--", *rest)
         if command == "verify":
-            lock_flake(require_nix())
+            if found := shutil.which("nix"):
+                lock_flake(found)
             return script("verify.py", *arguments)
         if command == "validate":
             return script("validate-knowledge.py")

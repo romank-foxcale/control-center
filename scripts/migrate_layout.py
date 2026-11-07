@@ -108,7 +108,7 @@ def plan(root: Path) -> dict[str, Any]:
 def move(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
-        os.rename(source, destination)
+        hostos.rename(source, destination)
     except OSError:  # another drive: copy, then delete (git's read-only pack files need hostos.rmtree on Windows)
         shutil.copytree(source, destination, symlinks=True)
         hostos.rmtree(source)

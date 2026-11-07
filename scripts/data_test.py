@@ -27,6 +27,11 @@ except ImportError:  # Windows: no termios
     pty = None
 
 # Types a line into the input buffer of another process's console, as a person at that console would.
+# On Windows a venv's python.exe is a launcher that starts the real interpreter as its child. With no console above it,
+# Windows gives that child a new console, so the "no terminal" case would find one, and keys typed at the launcher's
+# console miss the reader. data.py needs only the standard library, so its test children run the base interpreter.
+PYTHON = getattr(sys, "_base_executable", sys.executable)
+
 TYPER = r"""
 import ctypes, sys, time
 from ctypes import wintypes
@@ -134,7 +139,7 @@ class Remove(unittest.TestCase):
         self.assertIsNone(data.ask_terminal("x: ", Path(self.temp / "no-such-tty")))
         script = Path(data.__file__)
         # No controlling terminal: a new session on POSIX, no console at all on Windows.
-        result = subprocess.run([sys.executable, "-B", str(script), str(self.root), "remove", "emb"],
+        result = subprocess.run([PYTHON, "-B", str(script), str(self.root), "remove", "emb"],
                                 capture_output=True, text=True, stdin=subprocess.DEVNULL, start_new_session=True,
                                 creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
                                 env={**os.environ, **self.env, "CLAUDECODE": ""})
@@ -171,11 +176,11 @@ class Remove(unittest.TestCase):
     def typed_on_a_windows_console(self, env: dict[str, str]) -> None:
         """The script runs in a hidden console of its own; the answer reaches it only as keys typed at that console."""
         hidden = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=0)
-        child = subprocess.Popen([sys.executable, "-B", data.__file__, str(self.root), "remove", "emb"], env=env,
+        child = subprocess.Popen([PYTHON, "-B", data.__file__, str(self.root), "remove", "emb"], env=env,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                  creationflags=subprocess.CREATE_NEW_CONSOLE, startupinfo=hidden)
         try:
-            typer = subprocess.run([sys.executable, "-c", TYPER, str(child.pid), "my-cc/emb"],
+            typer = subprocess.run([PYTHON, "-c", TYPER, str(child.pid), "my-cc/emb"],
                                    creationflags=subprocess.DETACHED_PROCESS, timeout=60)
             output, _ = child.communicate(timeout=60)
         finally:
