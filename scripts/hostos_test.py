@@ -83,13 +83,14 @@ class StopTree(unittest.TestCase):
         self.assertTrue(Path(found).is_absolute())  # type: ignore[arg-type]
 
     def test_a_timeout_stops_the_shim_and_its_child(self) -> None:
-        began = time.monotonic()
         process = hostos.start(["fakecli"], stdout=subprocess.PIPE, text=True)
+        # Arm the timeout only once the child runs: on a loaded machine Python start-up alone can take over 1 s.
+        child = int(process.stdout.readline())  # type: ignore[union-attr]
+        self.assertTrue(hostos.alive(child))
+        began = time.monotonic()
         timer = threading.Timer(1.0, hostos.stop_tree, [process])
         timer.start()
         try:
-            child = int(process.stdout.readline())  # type: ignore[union-attr]
-            self.assertTrue(hostos.alive(child))
             process.stdout.read()  # type: ignore[union-attr]  # ends only when every writer is gone
             process.wait(timeout=10)
         finally:
