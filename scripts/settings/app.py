@@ -21,6 +21,7 @@ from textual.widgets.option_list import Option
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from state import Snapshot, snapshot  # noqa: E402
+import hostos  # noqa: E402  (state.py puts scripts/ on the path)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "council"))
 from progress import SPINNER  # noqa: E402  shared with the council runner
 
@@ -30,7 +31,8 @@ TABS = ("agents", "councils", "repos", "trello")
 def available_models(root: Path) -> dict[str, list[str]]:
     """Models per logged-in provider, from the CC's own provider adapter."""
     result = subprocess.run(
-        [sys.executable, str(root / "scripts" / "council" / "providers.py"), "models"], capture_output=True, text=True
+        [sys.executable, str(root / "scripts" / "council" / "providers.py"), "models"], capture_output=True,
+        encoding="utf-8", errors="replace",
     )
     try:
         return json.loads(result.stdout)
@@ -306,9 +308,13 @@ class Settings(App):
 
     # Actions: every change goes through ./cc ------------------------------------------
 
+    def run_cc(self, arguments: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+        """./cc with these arguments, started through the interpreter: the extensionless shim cannot run on Windows."""
+        return subprocess.run([*hostos.cc_command(self.root), *arguments], cwd=self.root, capture_output=True,
+                              encoding="utf-8", errors="replace")
+
     def cc(self, *arguments: str) -> None:
-        command = [str(self.root / "cc"), *arguments]
-        result = subprocess.run(command, cwd=self.root, capture_output=True, text=True)
+        result = self.run_cc(arguments)
         output = (result.stdout + result.stderr).strip() or "done"
         self.notify(output[-400:], severity="information" if result.returncode == 0 else "error", timeout=8)
         self.action_refresh()
@@ -319,7 +325,7 @@ class Settings(App):
         self.run_worker(lambda: self._cc_thread(arguments), thread=True)
 
     def _cc_thread(self, arguments: tuple[str, ...]) -> None:
-        result = subprocess.run([str(self.root / "cc"), *arguments], cwd=self.root, capture_output=True, text=True)
+        result = self.run_cc(arguments)
         output = (result.stdout + result.stderr).strip() or "done"
         self.call_from_thread(self.notify, output[-400:], severity="information" if result.returncode == 0 else "error", timeout=8)
         self.call_from_thread(self.action_refresh)
@@ -410,7 +416,7 @@ class Settings(App):
 
     def output(self, *arguments: str) -> list[str] | None:
         """Run ./cc in a worker thread; on failure tell the user and return None."""
-        result = subprocess.run([str(self.root / "cc"), *arguments], cwd=self.root, capture_output=True, text=True)
+        result = self.run_cc(arguments)
         if result.returncode != 0:
             self.call_from_thread(self.notify, (result.stderr or result.stdout).strip()[-300:], severity="error", timeout=10)
             return None

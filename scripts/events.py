@@ -16,6 +16,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hostos  # noqa: E402
+
 # Silence longer than this is reported as a stall, and again after each further period of silence.
 STALL_SECONDS = 180
 # Ends the stream; a nested process (verify inside a council) writing to its parent's stream never emits it.
@@ -121,15 +124,10 @@ def ended(path: Path) -> bool:
 
 
 def alive(pid: int | None) -> bool:
+    """True while the writer runs; a stream that names no writer pid counts as alive."""
     if not pid:
         return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        pass
-    return True
+    return hostos.alive(pid)
 
 
 def follow(path: Path, out=sys.stdout, poll: float = 1.0) -> int:

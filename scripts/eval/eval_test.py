@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fixture  # noqa: E402
 import run  # noqa: E402
 import scenarios  # noqa: E402
 
@@ -96,6 +98,24 @@ def check_test_runner(base: Path) -> None:
     assert subprocess.run([sys.executable, "-c", scenarios.TEST_RUNNER], cwd=repo, capture_output=True).returncode == 0
 
 
+def check_fixture_helpers(base: Path) -> None:
+    """The fixture's rm -rf removes read-only files (git packs, locked remotes), and a CC's CLI starts through the
+    interpreter unless the kit variant predates scripts/cc.py."""
+    remotes = base / "fixture" / "remotes"
+    subprocess.run(["git", "init", "-q", "--bare", str(remotes / "calc.git")], check=True)
+    fixture.writable(remotes, False)
+    assert not os.access(remotes / "calc.git" / "HEAD", os.W_OK), "the remotes are locked"
+    fixture.remove(base / "fixture")
+    assert not (base / "fixture").exists()
+    fixture.remove(base / "fixture")  # nothing left to remove is not an error
+    cc = base / "variant"
+    (cc / "scripts").mkdir(parents=True)
+    assert scenarios.cc_argv(cc) == [str(cc / "cc")], "an old variant has only the shim"
+    (cc / "scripts" / "cc.py").write_text("import sys\nprint('cc', *sys.argv[1:])\n", encoding="utf-8")
+    assert scenarios.cc_argv(cc) == [sys.executable, str(cc / "scripts" / "cc.py")]
+    assert scenarios.run_cc(cc, "agents", "check").stdout.strip() == "cc agents check"
+
+
 def record(scenario: str, ok: bool, cost: float, turns: int) -> dict:
     return {"scenario": scenario, "rep": 1, "pass": ok, "checks": {"x": ok}, "cost_usd": cost, "duration_s": 10.0,
             "turns": turns, "input_tokens": 100, "cache_creation": 0, "cache_read": 900, "output_tokens": 50}
@@ -128,6 +148,7 @@ def main() -> int:
         check_commit_grader(base)
         check_test_runner(base)
         check_lesson_grader(base)
+        check_fixture_helpers(base)
     print("eval test passed")
     return 0
 

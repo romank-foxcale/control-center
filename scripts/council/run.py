@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ import providers
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import events  # noqa: E402
+import hostos  # noqa: E402
 
 
 TERMINAL = {"done", "rejected", "verify-failed", "blocked-security", "failed"}
@@ -44,7 +46,16 @@ def load_json(path: Path) -> dict[str, Any]:
 def write_json(path: Path, data: dict[str, Any]) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    # Windows refuses to replace a file that another process holds open for a moment (a reader such as
+    # ./cc settings, a virus scanner); that is access denied, not a lasting error. Elsewhere rename never waits.
+    for attempt in range(50):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt == 49:
+                raise
+            time.sleep(0.1)
 
 
 def say(message: str) -> None:
@@ -96,7 +107,7 @@ class Ticker(threading.Thread):
 
 def git(worktree: Path, *arguments: str) -> str:
     return subprocess.run(
-        ["git", "-C", str(worktree), *arguments], check=True, capture_output=True, text=True
+        ["git", "-C", str(worktree), *arguments], check=True, capture_output=True, encoding="utf-8", errors="replace"
     ).stdout
 
 
@@ -154,7 +165,8 @@ def worktree_diff(worktree: Path) -> str:
         result = subprocess.run(
             ["git", "-C", str(worktree), "diff", "--no-index", "--", "/dev/null", path],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         diff += result.stdout
     return diff
@@ -284,10 +296,13 @@ class Run:
     def verify(self, name: str) -> tuple[bool, str, list[tuple[str, str, str]]]:
         say(f"   ./cc feature {self.state['feature']} verify ({name})")
         result = subprocess.run(
-            [str(self.root / "cc"), "feature", self.state["feature"], "verify", self.state["repository"], "--quality", "--full"],
+            # Through the interpreter: Windows cannot start the extensionless cc shim.
+            [*hostos.cc_command(self.root), "feature", self.state["feature"], "verify", self.state["repository"],
+             "--quality", "--full"],
             cwd=self.root,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             # verify reports its gates and stalls into this run's stream.
             env={**os.environ, "CC_EVENTS": str(self.events.path)},
         )

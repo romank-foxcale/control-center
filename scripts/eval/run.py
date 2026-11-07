@@ -11,7 +11,7 @@ cost, time and turns come from the CLI's own result event. See docs/kit/decision
   ./cc eval regrade <label>
 
 Runs use the user's own claude login and skip permission prompts, inside throwaway copies under
-$CC_EVAL_WORK (default /tmp/cc-eval). Results go to .cc-local/eval/<label>.jsonl.
+$CC_EVAL_WORK (default cc-eval in the system temp folder, /tmp/cc-eval on Linux). Results go to .cc-local/eval/<label>.jsonl.
 """
 
 from __future__ import annotations
@@ -23,19 +23,21 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from scenarios import SCENARIOS, head, parse_stream  # noqa: E402
+from fixture import remove  # noqa: E402
+from scenarios import SCENARIOS, head, hostos, parse_stream  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 TIMEOUT = 25 * 60
 
 
 def work_root(label: str) -> Path:
-    return Path(os.environ.get("CC_EVAL_WORK", "/tmp/cc-eval")) / label
+    return Path(os.environ.get("CC_EVAL_WORK", Path(tempfile.gettempdir()) / "cc-eval")) / label
 
 
 def results_path(root: Path, label: str) -> Path:
@@ -45,14 +47,14 @@ def results_path(root: Path, label: str) -> Path:
 def build_fixture(root: Path, label: str, ref: str) -> Path:
     work = work_root(label)
     kit = work / "kit"
-    if kit.exists():
-        shutil.rmtree(kit)
+    remove(kit)
     work.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(root), str(kit)], check=True)
     subprocess.run(["git", "-C", str(kit), "checkout", "-q", ref], check=True)
     fixture = work / "fixture"
-    print(f"{label}: building the fixture from {ref} ({subprocess.run(['git', '-C', str(kit), 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip()})", flush=True)
-    built = subprocess.run(["bash", str(HERE / "fixture.sh"), str(kit), str(fixture)], capture_output=True, text=True)
+    print(f"{label}: building the fixture from {ref} ({subprocess.run(['git', '-C', str(kit), 'rev-parse', '--short', 'HEAD'], capture_output=True, encoding='utf-8', errors='replace').stdout.strip()})", flush=True)
+    built = subprocess.run([sys.executable, str(HERE / "fixture.py"), str(kit), str(fixture)], capture_output=True,
+                           encoding="utf-8", errors="replace")
     if built.returncode != 0:
         raise ValueError(f"fixture build failed:\n{built.stdout}{built.stderr}")
     return fixture / "Projects" / "eval_CC"
@@ -72,7 +74,7 @@ def passed(checks: dict) -> bool:
 def run_one(label: str, fixture: Path, model: str, scenario: str, rep: int) -> dict:
     prompt, setup, _ = SCENARIOS[scenario]
     run_dir = work_root(label) / "runs" / f"{scenario}-{rep}"
-    shutil.rmtree(run_dir, ignore_errors=True)
+    remove(run_dir)  # git's read-only pack files included
     run_dir.mkdir(parents=True)
     cc = run_dir / "eval_CC"
     shutil.copytree(fixture, cc, symlinks=True)
@@ -84,7 +86,7 @@ def run_one(label: str, fixture: Path, model: str, scenario: str, rep: int) -> d
     with open(stream, "w", encoding="utf-8") as out:
         try:
             exit_code: int | str = subprocess.run(
-                ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--model", model,
+                [hostos.resolve_exe("claude") or "claude", "-p", prompt, "--output-format", "stream-json", "--verbose", "--model", model,
                  "--dangerously-skip-permissions", "--max-turns", "80"],
                 cwd=cc, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=TIMEOUT).returncode
         except subprocess.TimeoutExpired:

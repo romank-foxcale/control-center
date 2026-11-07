@@ -13,6 +13,9 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import hostos  # noqa: E402
+
 
 # Must match PROVIDERS and ACCESS_LEVELS in scripts/validate-control-center.py.
 PROVIDERS = ("claude", "codex", "cursor")
@@ -117,9 +120,9 @@ def models(provider: str) -> list[str]:
     if provider == "claude":
         return list(CLAUDE_MODELS)
     if provider == "cursor":
-        listed = subprocess.run(["cursor-agent", "models"], capture_output=True, text=True).stdout
+        listed = cli(["cursor-agent", "models"]).stdout
         return [match.group(1) for line in listed.splitlines() if (match := CURSOR_MODEL.match(line.strip()))]
-    result = subprocess.run(["codex", "debug", "models"], capture_output=True, text=True)
+    result = cli(["codex", "debug", "models"])
     try:
         catalog = json.loads(result.stdout)["models"]
     except (json.JSONDecodeError, KeyError, TypeError):
@@ -128,19 +131,26 @@ def models(provider: str) -> list[str]:
     return [model["slug"] for model in sorted(listed, key=lambda model: model.get("priority", 99))]
 
 
+def cli(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    """A short provider CLI call (status, models). The CLIs write UTF-8 whatever the console's code page, and
+    argv[0] is resolved to its full path: Windows does not start an npm .cmd shim by its bare name."""
+    return subprocess.run([hostos.resolve_exe(argv[0]) or argv[0], *argv[1:]], capture_output=True,
+                          encoding="utf-8", errors="replace")
+
+
 def login_status(provider: str) -> tuple[bool, str]:
     if provider not in BINARIES:
         return False, f"unknown provider {provider}"
-    if shutil.which(BINARIES[provider]) is None:
+    if hostos.resolve_exe(BINARIES[provider]) is None:
         return False, f"{BINARIES[provider]} CLI is not installed"
     if provider == "cursor":
-        result = subprocess.run(["cursor-agent", "status"], capture_output=True, text=True)
+        result = cli(["cursor-agent", "status"])
         line = next((line for line in result.stdout.splitlines() if "logged in" in line.lower()), "")
         if result.returncode == 0 and line and "not logged in" not in line.lower():
             return True, line.lstrip("✓ ").lower()
         return False, "not logged in; run: cursor-agent login"
     if provider == "claude":
-        result = subprocess.run(["claude", "auth", "status"], capture_output=True, text=True)
+        result = cli(["claude", "auth", "status"])
         try:
             data = json.loads(result.stdout)
         except json.JSONDecodeError:
@@ -148,7 +158,7 @@ def login_status(provider: str) -> tuple[bool, str]:
         if data.get("loggedIn"):
             return True, f"logged in ({data.get('authMethod', '?')})"
         return False, "not logged in; run: claude auth login"
-    result = subprocess.run(["codex", "login", "status"], capture_output=True, text=True)
+    result = cli(["codex", "login", "status"])
     message = (result.stdout + result.stderr).strip().splitlines()
     if result.returncode == 0 and message and "logged in" in message[-1].lower():
         return True, message[-1].lower()
@@ -217,7 +227,7 @@ def snapshot(worktree: Path, include: Iterable[Path] = ()) -> tuple[Path, dict[s
     for source_root in [worktree, *include]:
         listed = subprocess.run(
             ["git", "-C", str(source_root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-            capture_output=True, text=True,
+            capture_output=True, encoding="utf-8", errors="replace",
         )
         names = listed.stdout.split("\0") if listed.returncode == 0 else [
             str(path.relative_to(source_root)) for path in source_root.rglob("*") if path.is_file()
@@ -288,8 +298,12 @@ def stream_call(
     with log.open("w", encoding="utf-8") as stream:
         stream.write(f"$ {' '.join(argv)}\n\n")
         stream.flush()
-        process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stream, cwd=cwd, text=True)
-        timer = threading.Timer(timeout, process.kill)
+        # hostos.start finds npm .cmd shims (codex, cursor-agent), and stop_tree ends the whole tree: a shim's child
+        # that outlived a plain kill would hold stdout open, and the loop below would never end. The CLIs speak UTF-8
+        # on every OS, never the console's code page.
+        process = hostos.start(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stream, cwd=cwd,
+                               encoding="utf-8", errors="replace")
+        timer = threading.Timer(timeout, hostos.stop_tree, [process])
         timer.start()
         try:
             process.stdin.write(prompt)
@@ -314,7 +328,7 @@ def stream_call(
                 calls += sum(said.startswith("tool: ") for said in activity.splitlines())
                 if calls > cap:
                     stream.write(f"stopped: reached the cap of {cap} tool calls\n")
-                    process.kill()
+                    hostos.stop_tree(process)
                     break
             process.wait()
             # The last line of every log: what the call cost, or that its CLI never said.
@@ -322,6 +336,7 @@ def stream_call(
                          if used else "usage: not reported (the call ended before its CLI reported tokens)\n")
         finally:
             timer.cancel()
+            hostos.stop_tree(process)  # an error above must not leave the agent running; a no-op once it ended
     if calls > cap:
         raise ToolCapError(f"role {role['id']} ({role['provider']} {role['model']}) reached its cap of {cap} tool calls "
                            f"and was stopped; see {log}")
