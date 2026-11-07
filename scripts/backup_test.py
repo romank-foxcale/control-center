@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import backup  # noqa: E402
+import backup_where  # noqa: E402
 
 
 def git(directory: Path, *arguments: str) -> str:
@@ -31,8 +32,18 @@ def git(directory: Path, *arguments: str) -> str:
 
 
 def hashes(root: Path) -> dict[str, str]:
-    return {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+    return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(root.rglob("*")) if path.is_file() and ".git" not in path.parts}
+
+
+def link_folder(link: Path, target: Path) -> None:
+    """A symlink to a folder, or a junction where Windows refuses symlinks (no Developer Mode): both point outside."""
+    target.mkdir(exist_ok=True)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
 
 
 class Backup(unittest.TestCase):
@@ -252,7 +263,7 @@ class Backup(unittest.TestCase):
     def test_quiesce_skips_unless_pgrep_finds_nothing(self) -> None:
         self.tag(["irreplaceable"], quiesce=["opensearch"])
         for code, reason in ((0, "opensearch is running"), (2, "cannot check for opensearch (pgrep exit 2)"),
-                             (None, "cannot check for opensearch (pgrep not found)")):
+                             (None, "cannot check for opensearch (cannot list processes)")):
             with self.subTest(code=code), unittest.mock.patch.object(backup, "pgrep", return_value=code):
                 status, text = self.backup()
                 self.assertEqual(status, 1, text)
@@ -311,24 +322,61 @@ class Backup(unittest.TestCase):
     def test_unsafe_sources_are_skipped(self) -> None:
         self.tag(["irreplaceable"])
         (self.source / "A.parquet").write_bytes(b"upper")
-        (self.source / "a.PARQUET").write_bytes(b"lower")
-        status, text = self.backup()
+        (self.source / "a.PARQUET").write_bytes(b"lower")  # the same file on a case-insensitive drive
+        real_walk = os.walk
+
+        def walk(top, *arguments, **options):  # both names, as a case-sensitive file system lists them
+            for base, folders, names in real_walk(top, *arguments, **options):
+                yield base, folders, sorted({*names, "A.parquet", "a.PARQUET"}) \
+                    if os.path.samefile(base, self.source) else names
+
+        with unittest.mock.patch.object(backup.os, "walk", walk):
+            status, text = self.backup()
         self.assertEqual(status, 1, text)
         self.assertIn("names differ only in case", text)
         self.assertFalse(self.mirror.exists())
         for path in (self.source / "A.parquet", self.source / "a.PARQUET"):
-            path.unlink()
-        outside = self.temp / "outside.txt"
-        outside.write_text("not data")
-        (self.source / "link").symlink_to(outside)
+            path.unlink(missing_ok=True)
+        outside = self.temp / "outside"
+        link_folder(self.source / "link", outside)  # a symlink, or on Windows a junction, which os.walk enters
+        (outside / "secret.txt").write_text("not data")
         status, text = self.backup()
         self.assertEqual(status, 0, text)
         self.assertFalse((self.mirror / "link").exists())
-        self.assertNotIn("link", self.record()["complete"]["files"])
+        self.assertFalse([name for name in self.record()["complete"]["files"] if name.startswith("link")])
+        (self.source / "link").rmdir() if (self.source / "link").is_junction() else (self.source / "link").unlink()
         shutil.rmtree(self.source)
         status, text = self.backup()
         self.assertEqual(status, 1, text)
         self.assertIn("error: data embeddings not mirrored: .cc-local/data/embeddings is missing", text)
+
+    def test_windows_folder_names_restore_unchanged(self) -> None:
+        """backup.path under %USERPROFILE%, with spaces and non-ASCII names in folders and files: the CC and the data
+        come back from the backup with equal hashes. %USERPROFILE% is resolved from the environment as native Windows
+        has it (WSL asks cmd.exe instead; disk_test covers that)."""
+        profile = self.temp / "Benutzer Ä"
+        manifest = {"name": "my-cc", "backup": {"path": "%USERPROFILE%\\cc backups", "keep": 2}}
+        self.tag(["irreplaceable"])
+        manifest["localData"] = json.loads((self.root / "control-center.json").read_text())["localData"]
+        (self.root / "control-center.json").write_text(json.dumps(manifest))
+        (self.root / "заметки план.txt").write_text("untracked, non-ASCII name", encoding="utf-8")
+        (self.source / "данные файл.parquet").write_bytes(b"\x00\xff" * 64)
+        (self.source / "sous dossier").mkdir()
+        (self.source / "sous dossier" / "été.bin").write_bytes(b"summer")
+        data = hashes(self.source)
+        status, text = self.backup(USERPROFILE=str(profile))
+        self.assertEqual(status, 0, text)
+        [made] = [path for path in (profile / "cc backups" / "my-cc").iterdir() if backup.STAMP.fullmatch(path.name)]
+        restored = self.temp / "restored"
+        subprocess.run(["git", "clone", "-q", str(made / "cc.bundle"), str(restored)], check=True)
+        with tarfile.open(made / "changes.tar.gz") as opened:
+            opened.extractall(restored, filter="data")
+        self.assertEqual((restored / "заметки план.txt").read_text(encoding="utf-8"), "untracked, non-ASCII name")
+        shutil.rmtree(self.source)
+        out = io.StringIO()
+        self.assertEqual(backup_where.main([str(self.root), "restore", "embeddings"], {"USERPROFILE": str(profile)},
+                                           self.runner, out), 0, out.getvalue())
+        self.assertEqual(hashes(self.source), data)
 
     def test_too_little_space_skips(self) -> None:
         self.tag(["irreplaceable"])

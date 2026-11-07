@@ -2,8 +2,9 @@
 """./cc data remove <name> [--mirror]: delete a localData entry's folder (and with --mirror its mirrors and records)
 after the user types <cc name>/<entry name> on their own terminal.
 
-This is the only kit command that deletes data a mirror protects. It reads the answer from /dev/tty, not stdin, and
-refuses inside Claude Code (CLAUDECODE is set), so an agent cannot confirm it for the user; the hooks also deny it.
+This is the only kit command that deletes data a mirror protects. It reads the answer from the terminal (/dev/tty, or
+the Windows console), not stdin, and refuses inside Claude Code (CLAUDECODE is set), so an agent cannot confirm it for
+the user; the hooks also deny it.
 Why and limits: docs/kit/decisions/0030-disk-management.md.
 """
 
@@ -12,22 +13,25 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 import time
 from pathlib import Path
 from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hostos  # noqa: E402
 from backup_where import mirrors  # noqa: E402
 from disk import Runner, human, run, tree_size  # noqa: E402
 
 
-def ask_terminal(prompt: str, tty: Path = Path("/dev/tty")) -> str | None:
-    """One line typed on the controlling terminal, or None when there is none."""
-    try:  # unbuffered bytes: a buffered text handle opened r+ wants to seek, which a terminal cannot
-        with os.fdopen(os.open(tty, os.O_RDWR), "r+b", buffering=0) as terminal:
+def ask_terminal(prompt: str, tty: Path | None = None) -> str | None:
+    """One line typed on the controlling terminal (/dev/tty; CONIN$ and CONOUT$ on Windows), or None when there is
+    none. tty names one file for both directions instead, for a test."""
+    source, sink = (str(tty), str(tty)) if tty else hostos.terminal()
+    try:  # unbuffered bytes: a buffered text handle wants to seek, which a terminal cannot
+        with os.fdopen(os.open(sink, os.O_WRONLY), "wb", buffering=0) as terminal:
             terminal.write(prompt.encode())
+        with os.fdopen(os.open(source, os.O_RDONLY), "rb", buffering=0) as terminal:
             line = terminal.readline()
     except OSError:
         return None
@@ -71,10 +75,10 @@ def remove(root: Path, name: str, with_mirror: bool, env: dict[str, str], runner
         print(f"error: the answer was not {expected}; nothing was deleted", file=out)
         return 1
     if source.exists():
-        shutil.rmtree(source)
+        hostos.rmtree(source)
         print(f"deleted {source}", file=out)
     for path in copies:
-        shutil.rmtree(path)
+        hostos.rmtree(path)
         path.with_name(f"{path.name}.json").unlink(missing_ok=True)
         print(f"deleted the mirror {path} and its record", file=out)
     if not with_mirror:

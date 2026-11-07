@@ -8,19 +8,22 @@ nested under their kind and worktrees follow."""
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS))
+import hostos  # noqa: E402
+
+NEUTRAL = Path(tempfile.gettempdir())  # git must not find the repository the test was started from
 OLD = {"projectsRoot": "..", "repositories": "../repos", "worktrees": "../worktrees", "worktreePattern": "{feature}/{repository}_wt"}
 FLAT = {"projectsRoot": ".", "repositories": "repos", "worktrees": "worktrees", "worktreePattern": "{feature}/{repository}_wt"}
 
 
 def run(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(arguments, capture_output=True, text=True)
+    result = subprocess.run(arguments, capture_output=True, text=True, cwd=NEUTRAL)
     if check and result.returncode != 0:
         raise AssertionError(f"{arguments}: {result.stdout}{result.stderr}")
     return result
@@ -68,6 +71,19 @@ def feature(cc: Path, base: Path, feature_root: Path, name: str, identifier: str
     return worktree
 
 
+def writable(path: Path) -> bool:
+    """What the OS allows: os.access sees only the read-only flag on Windows, not the deny ACL."""
+    try:
+        if path.is_file():
+            path.open("a").close()
+        else:
+            (path / "probe.txt").write_text("x")
+            (path / "probe.txt").unlink()
+        return True
+    except PermissionError:
+        return False
+
+
 def migrate(root: Path, *flags: str) -> subprocess.CompletedProcess[str]:
     return run(sys.executable, str(SCRIPTS / "migrate_layout.py"), str(root), *flags, check=False)
 
@@ -98,7 +114,7 @@ def check_shared(directory: Path) -> None:
     assert git(wt, "rev-parse", "HEAD") == head and (wt / "draft.txt").is_file(), "commits and local changes survive"
     assert git(wt, "branch", "--show-current") == "beta-db"
     listed = git(base, "worktree", "list", "--porcelain")
-    assert f"worktree {wt}" in listed and "prunable" not in listed, listed
+    assert f"worktree {wt.as_posix()}" in listed and "prunable" not in listed, listed
     manifest = json.loads((shop / "worktrees/beta-db/.cc-worktree.json").read_text())["repositories"]["shop-backend"]
     assert manifest["base"] == "repos/project/shop-backend" and manifest["worktree"] == "worktrees/beta-db/shop-backend_wt", manifest
     state = json.loads((shop / "worktrees/beta-db/.cc-runs/r1/state.json").read_text())
@@ -106,9 +122,9 @@ def check_shared(directory: Path) -> None:
     assert str(base) in (shop / "worktrees/beta-db/CLAUDE.md").read_text()
 
     poc = shop / "repos" / "reference" / "shop-poc"
-    assert (poc / ".git").is_dir() and not os.access(poc / "README.md", os.W_OK) and not os.access(poc, os.W_OK), \
+    assert (poc / ".git").is_dir() and not writable(poc / "README.md") and not writable(poc), \
         "a reference clone is read-only on disk"
-    assert os.access(poc / ".git", os.W_OK)
+    assert writable(poc / ".git")
     assert json.loads((shop / "control-center.json").read_text())["layout"]["repositories"] == "repos"
     assert "/repos/" in (shop / ".gitignore").read_text() and "/worktrees/" in (shop / ".gitignore").read_text()
     status = run(sys.executable, str(SCRIPTS / "worktrees.py"), str(shop), "status", "beta-db")
@@ -148,18 +164,20 @@ def check_flat(directory: Path) -> None:
     manifest = json.loads((cc / "worktrees/feat/.cc-worktree.json").read_text())["repositories"]["api"]
     assert manifest["base"] == "repos/project/api" and manifest["worktree"] == "worktrees/feat/api_wt", manifest
     assert json.loads((cc / "worktrees/feat/.cc-runs/r1/state.json").read_text())["base"] == str(base)
-    assert not os.access(cc / "repos" / "reference" / "demo" / "README.md", os.W_OK)
+    assert not writable(cc / "repos" / "reference" / "demo" / "README.md") and not writable(cc / "repos" / "reference" / "demo")
     assert run(sys.executable, str(SCRIPTS / "repositories.py"), str(cc), "strays").returncode == 0
     assert migrate(cc).stdout.startswith("already on the per-CC layout")
 
 
 def main() -> int:
     with tempfile.TemporaryDirectory() as directory:
+        base = hostos.long_path(directory)  # the spelling git prints: no 8.3 names, symlinks resolved
         try:
-            check_shared(Path(directory))
-            check_flat(Path(directory))
+            check_shared(base)
+            check_flat(base)
         finally:
-            run("chmod", "-R", "u+w", directory)  # read-only reference clones would block the cleanup
+            for clone in base.glob("*/*/repos/reference/*"):  # protected clones would block the cleanup
+                hostos.write_protect(clone, read_only=False)
     print("migrate layout test passed")
     return 0
 

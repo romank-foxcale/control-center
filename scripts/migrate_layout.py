@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import hostos
 import repositories
 
 NEW_LAYOUT = {"projectsRoot": ".", "repositories": "repos", "worktrees": "worktrees", "worktreePattern": "{feature}/{repository}_wt"}
@@ -108,14 +109,17 @@ def move(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.rename(source, destination)
-    except OSError:
-        shutil.move(str(source), str(destination))
+    except OSError:  # another drive: copy, then delete (git's read-only pack files need hostos.rmtree on Windows)
+        shutil.copytree(source, destination, symlinks=True)
+        hostos.rmtree(source)
 
 
 def replace_paths(path: Path, pairs: list[tuple[str, str]]) -> None:
     """Replace whole path names only: /repos/shop must not rewrite /repos/shop-backend."""
     text = path.read_text(encoding="utf-8")
-    for old, new in sorted(pairs, key=lambda pair: -len(pair[0])):
+    # JSON doubles each backslash of a Windows path, so the escaped spelling is replaced as well.
+    escaped = [(json.dumps(old)[1:-1], json.dumps(new)[1:-1]) for old, new in pairs if json.dumps(old)[1:-1] != old]
+    for old, new in sorted(pairs + escaped, key=lambda pair: -len(pair[0])):
         # A period ends the path only at the end of a sentence: feature names may contain dots (v1.2).
         text = re.sub(re.escape(old) + r"(?=[/\\\"'\s:,;)]|\.(?:\s|$)|$)", new.replace("\\", "\\\\"), text)
     path.write_text(text, encoding="utf-8")
@@ -145,7 +149,9 @@ def migrate(root: Path, dry_run: bool) -> int:
             feature_moves[path.resolve().parent] / path.name if path.resolve().parent in feature_moves else path
             for path in worktree_paths(source)
         ]
-    for _, source, destination in steps["repos"]:
+    for identifier, source, destination in steps["repos"]:
+        if steps["kinds"].get(identifier) == "reference":
+            repositories.protect(source, read_only=False)  # protected again below, at its new place
         move(source, destination)
     for source, destination in steps["features"]:
         move(source, destination)

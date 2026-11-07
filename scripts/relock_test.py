@@ -31,7 +31,7 @@ def lock(nixpkgs_rev: str, api_rev: str = "1" * 40) -> dict:
 
 class Relock(unittest.TestCase):
     def setUp(self) -> None:
-        self.root = Path(tempfile.mkdtemp())
+        self.root = Path(tempfile.mkdtemp()).resolve()  # relock names the resolved root (no 8.3 short names)
         (self.root / "nix").mkdir()
         (self.root / "nix/kit-nixpkgs.json").write_text(json.dumps({"rev": KIT}))
         self.text = json.dumps(lock(OLD), indent=2) + "\n"
