@@ -21,7 +21,7 @@ import cc  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = os.name == "nt"
 # Every command of the bash ./cc this CLI replaces (plan native-core, W1).
-COMMANDS = ["doctor", "backup", "data", "relock", "gc", "show", "check", "build", "run", "verify", "validate", "agents",
+COMMANDS = ["doctor", "backup", "data", "relock", "gc", "show", "check", "build", "run", "verify", "validate", "agents", "hook",
             "bootstrap", "repo", "prs", "worktree", "migrate-layout", "trello", "open", "watch", "council", "eval",
             "settings", "plan", "feature"]
 

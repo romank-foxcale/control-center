@@ -38,6 +38,7 @@ Commands:
   settings [show]  Settings panel: agents and models, councils, repos; show prints them as text
   validate       Validate the Markdown knowledge graph
   agents <sync|check>  Mirror .agents/skills into .claude/skills
+  hook <event>   Run a rule hook on the event JSON in stdin (called by Claude Code, see .claude/settings.json)
   bootstrap install [target]  Materialize a new CC from this clone
   bootstrap validate          Validate the configured CC contract
   repo <add|list|show|remove|set-branch|set-remote|set-kind|set-status|set-targets|set-stack|strays> ...
@@ -216,6 +217,8 @@ def main(argv: list[str]) -> int:
             return script("agent-configs.py", arguments[0] if arguments else "check")
         if command == "bootstrap":
             return bootstrap(arguments)
+        if command == "hook":
+            return script("rule_hooks.py", *arguments, root=False)
         if command == "open":
             return script("worktrees.py", "open", *arguments)
         if command == "eval":
