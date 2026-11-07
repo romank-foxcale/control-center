@@ -23,8 +23,14 @@ INSTRUCTION_STUBS = {
 SETTINGS = Path(".claude/settings.json")
 
 
+# Shell form through the POSIX shim: sh -c on Linux and macOS, Git Bash on Windows, where Claude Code sets
+# CLAUDE_PROJECT_DIR as C:/... Exec form cannot spawn the extensionless shim, and PowerShell must never call it
+# (it reached cc.cmd with no stdin and allowed the call). "onFailure": "block" (Claude Code >= 2.1.295) makes a
+# crash, spawn failure, timeout or exit other than 0/2 block the call instead of failing open. Without Git Bash on
+# Windows this form fails closed. Why: plan native-core, spike S2.
 def hook(event: str) -> list[dict[str, object]]:
-    return [{"type": "command", "command": f'"$CLAUDE_PROJECT_DIR"/scripts/hook {event}', "timeout": 15}]
+    return [{"type": "command", "command": f'"$CLAUDE_PROJECT_DIR/cc" hook {event}', "timeout": 15,
+             "onFailure": "block"}]
 
 
 HOOKS = {
