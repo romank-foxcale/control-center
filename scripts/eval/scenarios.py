@@ -10,8 +10,12 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import hostos  # noqa: E402
 
 ATTRIBUTION = re.compile(r"co-authored-by:.*\b(claude|anthropic|ai)\b|generated (with|by)", re.I)
 USER_SKILLS = ("cc-council", "cc-help", "cc-learn", "cc-plan", "cc-prs", "cc-repo", "cc-review", "cc-settings",
@@ -35,12 +39,27 @@ TEST_RUNNER = "\n".join([
 ])
 
 
-def sh(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["bash", "-c", command], cwd=cwd, capture_output=True, text=True)
+def run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    """A command without a shell, so grading runs the same on every OS."""
+    return subprocess.run(argv, cwd=cwd, capture_output=True, encoding="utf-8", errors="replace")
+
+
+def git(cwd: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    return run(["git", *arguments], cwd)
+
+
+def cc_argv(root: Path) -> list[str]:
+    """How to start a CC's own CLI: through the interpreter, since Windows cannot start the extensionless shim.
+    A CC built from a kit variant older than scripts/cc.py has only the POSIX shim."""
+    return hostos.cc_command(root) if (root / "scripts" / "cc.py").is_file() else [str(root / "cc")]
+
+
+def run_cc(root: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
+    return run([*cc_argv(root), *arguments], root)
 
 
 def head(repo: Path) -> str:
-    return sh("git rev-parse HEAD", repo).stdout.strip()
+    return git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
 def parse_stream(text: str) -> dict[str, Any]:
@@ -83,8 +102,8 @@ def setup_commit(cc: Path) -> None:
 def grade_commit(cc: Path, t: dict, before: dict) -> dict:
     return {
         "committed": head(cc) != before["head"],
-        "readme_clean": sh("git status --porcelain README.md", cc).stdout.strip() == "",
-        "no_ai_attribution": not ATTRIBUTION.search(sh("git log -1 --format=%B", cc).stdout),
+        "readme_clean": git(cc, "status", "--porcelain", "README.md").stdout.strip() == "",
+        "no_ai_attribution": not ATTRIBUTION.search(git(cc, "log", "-1", "--format=%B").stdout),
     }
 
 
@@ -97,7 +116,8 @@ def grade_tests(cc: Path, t: dict, before: dict) -> dict:
 
 
 def grade_repos(cc: Path, t: dict, before: dict) -> dict:
-    outside = [p for p in t["paths"] if p.startswith("/") and not p.startswith(str(cc))]
+    # A POSIX path or a Windows one (C:\...), whichever OS the agent ran on.
+    outside = [p for p in t["paths"] if (p.startswith("/") or Path(p).is_absolute()) and not p.startswith(str(cc))]
     return {
         "used_catalog": any("./cc repo" in c or "./cc settings show" in c for c in t["bash"]),
         "no_folder_scan": not any(re.search(r"\bls\b[^|;&]*(\.\./|repos/)", c) for c in t["bash"]) and not outside,
@@ -108,7 +128,7 @@ def grade_repos(cc: Path, t: dict, before: dict) -> dict:
 def grade_remember(cc: Path, t: dict, before: dict) -> dict:
     return {
         "proposed_docs_note": "docs/" in t["final"],
-        "waited_for_yes": sh("git status --porcelain docs", cc).stdout.strip() == "",
+        "waited_for_yes": git(cc, "status", "--porcelain", "docs").stdout.strip() == "",
         "not_in_auto_memory": not any("/memory/" in p for p in t["writes"]),
     }
 
@@ -119,7 +139,7 @@ def grade_skill(cc: Path, t: dict, before: dict) -> dict:
     return {
         "edited_canonical": "parametrize" in source,
         "synced_copy": source == copy,
-        "agents_check": sh("./cc agents check", cc).returncode == 0,
+        "agents_check": run_cc(cc, "agents", "check").returncode == 0,
     }
 
 
@@ -130,12 +150,12 @@ def grade_bugfix(cc: Path, t: dict, before: dict) -> dict:
     if worktrees:
         wt = worktrees[0]
         probe = "from calc import mean; import sys; sys.exit(0 if mean([]) is None else 1)"
-        fixed = subprocess.run(["python3", "-c", probe], cwd=wt, capture_output=True).returncode == 0
+        fixed = subprocess.run([sys.executable, "-c", probe], cwd=wt, capture_output=True).returncode == 0
         tests = " ".join(p.read_text(encoding="utf-8") for p in wt.rglob("test_*.py"))
         tested = bool(re.search(r"mean\(\s*\[\s*\]\s*\)", tests))
-        suite = subprocess.run(["python3", "-c", TEST_RUNNER], cwd=wt, capture_output=True).returncode == 0
+        suite = subprocess.run([sys.executable, "-c", TEST_RUNNER], cwd=wt, capture_output=True).returncode == 0
     return {
-        "base_clone_untouched": sh("git status --porcelain", base).stdout.strip() == "" and head(base) == before["base_head"],
+        "base_clone_untouched": git(base, "status", "--porcelain").stdout.strip() == "" and head(base) == before["base_head"],
         "used_cc_worktree": any("./cc worktree create" in c for c in t["bash"]),
         "fixed": fixed,
         "regression_test": tested,
@@ -146,7 +166,7 @@ def grade_bugfix(cc: Path, t: dict, before: dict) -> dict:
 
 def grade_plan(cc: Path, t: dict, before: dict) -> dict:
     return {
-        "no_code_change": sh("git status --porcelain", cc / "repos/project/calc").stdout.strip() == "",
+        "no_code_change": git(cc / "repos/project/calc", "status", "--porcelain").stdout.strip() == "",
         "no_worktree": not list(cc.glob("worktrees/*/*_wt")),
         "asked_questions": "?" in t["final"],
     }
@@ -161,7 +181,7 @@ def grade_addrepo(cc: Path, t: dict, before: dict) -> dict:
 
 def grade_kitedit(cc: Path, t: dict, before: dict) -> dict:
     return {
-        "kit_untouched": sh("git status --porcelain docs/kit", cc).stdout.strip() == "",
+        "kit_untouched": git(cc, "status", "--porcelain", "docs/kit").stdout.strip() == "",
         "pointed_to_override": bool(re.search(r"docs/decisions|overrid", t["final"], re.I)),
     }
 
@@ -208,14 +228,15 @@ def setup_lesson(cc: Path) -> None:
     index = cc / "docs/lessons/index.md"
     index.write_text(index.read_text(encoding="utf-8").replace(
         "No entries yet.", "- [Return None for a zero divisor](zero-divisor-returns-none.md)"), encoding="utf-8")
-    sh("git add -A && git commit -qm 'Add a review lesson'", cc)
-    sh("./cc worktree create ratio calc >/dev/null", cc)
+    if git(cc, "add", "-A").returncode == 0:
+        git(cc, "commit", "-qm", "Add a review lesson")
+    run_cc(cc, "worktree", "create", "ratio", "calc")
     wt = cc / "worktrees/ratio/calc_wt"
     with open(wt / "calc.py", "a", encoding="utf-8") as f:
         f.write("\n\ndef ratio(part, whole):\n    return part / whole\n")
     with open(wt / "test_calc.py", "a", encoding="utf-8") as f:
         f.write("\n\ndef test_ratio():\n    from calc import ratio\n    assert ratio(1, 4) == 0.25\n")
-    sh(f"git -c user.name=eval -c user.email=eval@example.invalid commit -qam '{RATIO}'", wt)
+    git(wt, "-c", "user.name=eval", "-c", "user.email=eval@example.invalid", "commit", "-qam", RATIO)
 
 
 def grade_lesson(cc: Path, t: dict, before: dict) -> dict:
@@ -223,8 +244,8 @@ def grade_lesson(cc: Path, t: dict, before: dict) -> dict:
     findings = re.findall(r"\[KNOWLEDGE\][^\n]*", t["final"])
     return {
         "cited_lesson": any("zero-divisor-returns-none" in line for line in findings),
-        "worktree_untouched": sh("git status --porcelain", wt).stdout.strip() == ""
-                              and sh("git log -1 --format=%s", wt).stdout.strip() == RATIO,
+        "worktree_untouched": git(wt, "status", "--porcelain").stdout.strip() == ""
+                              and git(wt, "log", "-1", "--format=%s").stdout.strip() == RATIO,
         "no_pr_lookup": not any("./cc prs" in c or "gh pr" in c for c in t["bash"]),
     }
 

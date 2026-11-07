@@ -10,15 +10,21 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import providers
+from providers import hostos
 
 # The fake CLI answers status and models, and in --print mode does what FAKE_CURSOR_ACT says:
-# "reply" streams a preamble, a tool call and a closing message; "write" also writes into its workspace.
-FAKE_CURSOR = f"""#!{sys.executable}
-import json, os, sys
+# "reply" streams a preamble, a tool call and a closing message; "write" also writes into its workspace;
+# "echo" closes with the prompt it read; "hang" starts a long child that shares its stdout, then waits for it.
+# Like the real CLIs it reads and writes UTF-8, whatever the console's code page.
+FAKE_CURSOR = """
+import json, os, subprocess, sys
 from pathlib import Path
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
 if sys.argv[1:] == ["status"]:
     print("\\u2713 Logged in as dev@example.com" if os.environ.get("FAKE_CURSOR_LOGIN") else "Not logged in")
     sys.exit(0)
@@ -26,23 +32,85 @@ if sys.argv[1:] == ["models"]:
     print("Available models\\n\\nauto - Auto (default)\\ngrok-4.7-high - Grok 4.7  High\\nclaude-opus-5-thinking-high - Claude")
     sys.exit(0)
 workspace = Path(sys.argv[sys.argv.index("--workspace") + 1])
-Path(os.environ["FAKE_CURSOR_SEEN"]).write_text(json.dumps({{
-    "argv": sys.argv[1:], "cwd": os.getcwd(), "prompt": sys.stdin.read(),
+prompt = sys.stdin.read()
+act = os.environ.get("FAKE_CURSOR_ACT")
+Path(os.environ["FAKE_CURSOR_SEEN"]).write_text(json.dumps({
+    "argv": sys.argv[1:], "cwd": os.getcwd(), "prompt": prompt,
     "config": (workspace / ".cursor" / "cli.json").read_text(),
-    "files": sorted(str(p.relative_to(workspace)) for p in workspace.rglob("*") if p.is_file())}}))
-if os.environ.get("FAKE_CURSOR_ACT") == "write":
+    "files": sorted(Path(p.relative_to(workspace)).as_posix() for p in workspace.rglob("*") if p.is_file())}))
+if act == "write":
     (workspace / "app.py").write_text("tampered")
-def emit(event): print(json.dumps(event), flush=True)
-text = lambda words: {{"type": "assistant", "message": {{"content": [{{"type": "text", "text": words}}]}}}}
-emit({{"type": "system", "subtype": "init"}})
+def emit(event): print(json.dumps(event, ensure_ascii=False), flush=True)
+text = lambda words: {"type": "assistant", "message": {"content": [{"type": "text", "text": words}]}}
+emit({"type": "system", "subtype": "init"})
+if act == "hang":
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    Path(os.environ["FAKE_CURSOR_CHILD"]).write_text(str(child.pid))
+    sys.exit(child.wait())
 emit(text("I'll check the code first."))
 for _ in range(int(os.environ.get("FAKE_CURSOR_TOOLS", "1"))):
-    emit({{"type": "tool_call", "subtype": "started", "tool_call": {{"readToolCall": {{"args": {{"path": str(workspace / "app.py")}}}}}}}})
-emit(text("DECISION: A"))
-emit(text("## Reasoning\\nA reuses the parser."))
-emit({{"type": "result", "subtype": "success", "result": "I'll check the code first.DECISION: A## Reasoning",
-       "usage": {{"inputTokens": 11273, "outputTokens": 18, "cacheReadTokens": 500, "cacheWriteTokens": 7}}}})
+    emit({"type": "tool_call", "subtype": "started", "tool_call": {"readToolCall": {"args": {"path": str(workspace / "app.py")}}}})
+if act == "echo":
+    emit(text("heard: " + prompt))
+else:
+    emit(text("DECISION: A"))
+    emit(text("## Reasoning\\nA reuses the parser."))
+emit({"type": "result", "subtype": "success", "result": "I'll check the code first.DECISION: A## Reasoning",
+      "usage": {"inputTokens": 11273, "outputTokens": 18, "cacheReadTokens": 500, "cacheWriteTokens": 7}})
 """
+
+
+def install_cli(bin_dir: Path, name: str, source: str) -> None:
+    """A fake CLI found on PATH by its bare name, as the real one is: an npm-style .cmd shim on Windows, a shell
+    script elsewhere; both start the Python source with this interpreter."""
+    (bin_dir / f"{name}.py").write_text(source, encoding="utf-8")
+    if hostos.WINDOWS:
+        (bin_dir / f"{name}.cmd").write_text(f'@"{sys.executable}" "%~dp0{name}.py" %*\r\n', encoding="utf-8")
+    else:
+        shim = bin_dir / name
+        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$(dirname "$0")/{name}.py" "$@"\n', encoding="utf-8")
+        shim.chmod(0o755)
+    found = hostos.resolve_exe(name)
+    # Never a real, paid CLI: the fake must be the one PATH finds.
+    assert found and Path(found).parent == bin_dir, f"{name} resolves to {found}, not the fake in {bin_dir}"
+
+
+def wait_dead(pid: int, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while hostos.alive(pid):
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.1)
+    return True
+
+
+def check_utf8_round_trip(role: dict, worktree: Path, log: Path) -> None:
+    """Text that no Windows code page holds whole goes to the CLI on stdin and comes back on stdout unchanged."""
+    words = "🤖✓Ж"
+    os.environ["FAKE_CURSOR_ACT"] = "echo"
+    said: list[str] = []
+    reply = providers.run(role, f"Judge {words}.", worktree, log, on_say=said.append)
+    assert json.loads(Path(os.environ["FAKE_CURSOR_SEEN"]).read_text())["prompt"] == f"Judge {words}.", "stdin is UTF-8"
+    assert reply == f"heard: Judge {words}.", f"stdout is UTF-8: {reply!r}"
+    assert f"say: heard: Judge {words}." in log.read_text(encoding="utf-8") and said[-1] == f"heard: Judge {words}.", said
+    assert providers.login_status("cursor") == (True, "logged in as dev@example.com"), "the status check reads the UTF-8 mark"
+
+
+def check_timeout_stops_the_tree(role: dict, worktree: Path, log: Path, base: Path) -> None:
+    """A CLI shim whose child keeps stdout open still ends at its timeout, and leaves no child behind."""
+    child_file = base / "child.pid"
+    os.environ.update({"FAKE_CURSOR_ACT": "hang", "FAKE_CURSOR_CHILD": str(child_file)})
+    timeout = 2
+    began = time.monotonic()
+    try:
+        providers.run(role, "Judge.", worktree, log, timeout=timeout)
+        raise AssertionError("a call stopped at its timeout must fail")
+    except providers.ProviderError as error:
+        assert "failed" in str(error), error
+    took = time.monotonic() - began
+    child = int(child_file.read_text())
+    assert took < timeout + 5, f"the call returned {took:.1f}s after it started; the timeout was {timeout}s"
+    assert wait_dead(child, 5), f"the shim's child {child} outlived the timeout"
 
 
 def main() -> int:
@@ -50,10 +118,9 @@ def main() -> int:
         base = Path(directory)
         bin_dir = base / "bin"
         bin_dir.mkdir()
-        (bin_dir / "cursor-agent").write_text(FAKE_CURSOR)
-        (bin_dir / "cursor-agent").chmod(0o755)
         seen = base / "seen.json"
         os.environ.update({"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "FAKE_CURSOR_SEEN": str(seen)})
+        install_cli(bin_dir, "cursor-agent", FAKE_CURSOR)
 
         assert providers.login_status("cursor") == (False, "not logged in; run: cursor-agent login")
         assert providers.models("cursor") == [], "no models while logged out"
@@ -149,6 +216,10 @@ def main() -> int:
         ], log.read_text()
         assert providers.usage(log) is None, "a call stopped before its result has no usage, not zero"
         assert providers.max_tool_calls(role) == providers.DEFAULT_MAX_TOOL_CALLS
+        os.environ.pop("FAKE_CURSOR_TOOLS")
+
+        check_utf8_round_trip(role, worktree, log)
+        check_timeout_stops_the_tree(role, worktree, log, base)
 
     # read-only-web: web search and fetch on top of reading, and nothing else; plain read-only gets no web.
     # Claude's dontAsk mode denies WebSearch unless it is also allowed (checked with the real CLI, 2026-10).
