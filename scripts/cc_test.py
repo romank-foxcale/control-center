@@ -93,7 +93,8 @@ class WithoutNix(unittest.TestCase):
     def test_nix_commands_fail_clearly(self) -> None:
         real_which = shutil.which
         with mock.patch.object(cc.shutil, "which", side_effect=lambda name: None if name == "nix" else real_which(name)):
-            for argv in (("show",), ("check",), ("build", "x"), ("run", "x"), ("verify",), ("relock",), ("gc",)):
+            # check runs natively without Nix (scripts/checks.py); running it here would recurse into this test.
+            for argv in (("show",), ("build", "x"), ("run", "x"), ("verify",), ("relock",), ("gc",)):
                 code, _, err = run(*argv)
                 self.assertEqual(code, 1, argv)
                 self.assertIn("needs the optional Nix extra", err, argv)

@@ -154,7 +154,10 @@ def doctor(arguments: list[str]) -> int:
 
 
 def check(arguments: list[str]) -> int:
-    status = nix("flake", "check", *feature_overrides(), str(ROOT), "--keep-going", *arguments)
+    # The native check groups, then nix flake check as an optional extra that gets the arguments. Why: plan native-core
+    import checks
+
+    status = checks.main(arguments, ROOT)
     # A pass stamps the CC's tree, which the push hook looks for. Why: docs/kit/decisions/0028-verify-before-push.md
     if status == 0:
         script("verified.py", "record", str(ROOT), "check")
