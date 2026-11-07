@@ -20,10 +20,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import hostos
 import verified
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# The hooks read Bash (POSIX shell), PowerShell and cmd lines. A backslash is kept as written: in PowerShell and cmd
+# it separates path parts, and a POSIX path never needs one, so reading it literally finds more paths, never fewer.
 
 AI_NAMES = r"(claude|anthropic|openai|chatgpt|gpt|codex|copilot|cursor|gemini|devin|aider|llm)"
 # A trailer or footer starts a line (or a -m argument), so prose that mentions one is not a match.
@@ -52,8 +56,26 @@ BUILD_SUBCOMMANDS = {
     "yarn": {"test"},
     "bun": {"test"},
 }
-WRAPPERS = {"sudo", "time", "env", "exec", "nohup", "command"}
+WRAPPERS = {"sudo", "time", "env", "exec", "nohup", "command", "&"}  # & is PowerShell's call operator
 SEGMENT = re.compile(r"&&|\|\||[;|\n]|\$\(|`")
+EXECUTABLE_SUFFIXES = (".exe", ".cmd", ".bat", ".com")
+
+
+def shell_words(command: str, punctuation: bool | str = False) -> list[str]:
+    """Words of a shell line with quotes removed and backslashes kept (see the note at the top)."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=punctuation)
+        lexer.whitespace_split = True
+        lexer.escape = ""  # inside and outside quotes alike
+        return list(lexer)
+    except ValueError:
+        return command.split()
+
+
+def program(word: str) -> str:
+    """The command name a word runs: C:\\Tools\\CMake.EXE and /usr/bin/cmake are both cmake."""
+    name = posixpath.basename(word.replace("\\", "/")).lower()
+    return next((name.removesuffix(suffix) for suffix in EXECUTABLE_SUFFIXES if name.endswith(suffix)), name)
 
 
 def ai_attribution(text: str) -> str | None:
@@ -82,15 +104,12 @@ def markdown_allowed(relative: str, extra_dirs: tuple[str, ...] = ()) -> bool:
 def nix_bypass(command: str) -> str | None:
     """The build or test command a shell line runs directly, if any."""
     for segment in SEGMENT.split(command):
-        try:
-            words = shlex.split(segment)
-        except ValueError:
-            words = segment.split()
+        words = shell_words(segment)
         while words and (words[0] in WRAPPERS or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0])):
             words = words[1:]
         if not words:
             continue
-        name = Path(words[0]).name.removesuffix(".exe")
+        name = program(words[0])
         arguments = words[1:]
         if name in BUILD_TOOLS:
             return name
@@ -98,7 +117,7 @@ def nix_bypass(command: str) -> str | None:
             return f"{name} {arguments[0]}"
         if name == "docker" and arguments[:2] == ["compose", "build"]:
             return "docker compose build"
-        if re.fullmatch(r"python[0-9.]*", name) and arguments[:2] == ["-m", "pytest"]:
+        if re.fullmatch(r"python[0-9.]*|py", name) and arguments[:2] == ["-m", "pytest"]:
             return "python -m pytest"
     return None
 
@@ -123,10 +142,16 @@ def attributed_commits(repository: Path, base: str) -> list[str]:
 # Irreplaceable data (docs/kit/decisions/0030-disk-management.md): localData entries tagged irreplaceable and their
 # mirrors are deleted only by ./cc data remove, which the user runs and confirms in their own terminal. The hook reads
 # shell text: a variable from an earlier command, a script file or an alias is not seen (0013 names these limits).
-DELETE_VERBS = {"rm", "rmdir", "unlink", "shred", "truncate", "remove-item", "ri", "del", "erase", "rd"}
-COPY_VERBS = {"mv", "cp", "move-item", "copy-item", "move", "copy"}
+DELETE_VERBS = {"rm", "rmdir", "unlink", "shred", "truncate", "remove-item", "ri", "del", "erase", "rd", "clear-content",
+                "clc"}
+MOVE_VERBS = {"mv", "move-item", "mi", "move", "rename-item", "rni", "ren", "rename"}
+COPY_VERBS = MOVE_VERBS | {"cp", "copy-item", "cpi", "copy"}
+OVERWRITE_VERBS = {"set-content", "sc", "add-content", "ac", "out-file", "tee", "tee-object"}  # every path they name
 SHELLS = {"bash", "sh", "zsh", "dash"}
-INTERPRETERS = {"python", "python3", "node", "perl", "ruby", "pwsh", "powershell", "powershell.exe"}
+POWERSHELLS = {"pwsh", "powershell"}
+INTERPRETERS = {"python", "python3", "py", "node", "perl", "ruby", *POWERSHELLS}
+# $NAME, ${NAME}, PowerShell's $env:NAME and cmd's %NAME%.
+VARIABLE = re.compile(r"\$env:([A-Za-z_]\w*)|\$\{?([A-Za-z_]\w*)\}?|%([A-Za-z_]\w*)%", re.IGNORECASE)
 DESTRUCTIVE_CODE = re.compile(r"rmtree|\bremove\(|unlink|rmdir|\brename\(|\breplace\(|truncate|Remove-Item|"
                               r"[\"']w[b+]?[\"']|write_(?:bytes|text)", re.IGNORECASE)
 GROUP_BREAK = {";", "&&", "||", "|", "&", "(", ")"}
@@ -144,10 +169,25 @@ def path_key(raw: str) -> str:
     return posixpath.normpath(raw)
 
 
+def native_key(raw: str) -> str:
+    """path_key of the canonical spelling where this machine can see the path: 8.3 short names expanded, letter case,
+    symlinks and junctions resolved (hostos.long_path). On Windows a Git Bash /c/x or WSL /mnt/c/x path is C:\\x first."""
+    raw = hostos.native_spelling(raw.strip().strip("'\""))
+    if os.path.isabs(raw) and not raw.startswith(("\\\\", "//")):  # a network share may hang or be gone
+        try:
+            raw = str(hostos.long_path(raw))
+        except (OSError, ValueError):
+            pass
+    return path_key(raw)
+
+
 def joined(cwd: str, raw: str) -> str:
-    raw = os.path.expanduser(raw.strip("'\""))
+    """The key of raw, read relative to cwd unless it is absolute in any of the spellings path_key knows."""
+    raw = hostos.native_spelling(os.path.expanduser(raw.strip("'\"")))
     key = path_key(raw)
-    return key if key.startswith("/") or re.match(r"^[a-z]:/", key) else posixpath.normpath(f"{path_key(cwd)}/{raw}")
+    if key.startswith("/") or re.match(r"^[a-z]:/", key):
+        return native_key(raw)
+    return native_key(os.path.join(hostos.native_spelling(cwd), raw))
 
 
 def inside(path: str, folder: str) -> bool:
@@ -173,14 +213,24 @@ def protected(root: Path) -> tuple[list[str], dict[str, str], list[str]]:
         known = {}
     for name, mirrors in (known.get("mirrors") or {}).items() if isinstance(known, dict) else []:
         for mirror in mirrors if isinstance(mirrors, list) else []:
-            paths[path_key(mirror)] = name
-            paths[path_key(f"{mirror}.json")] = name
+            paths[native_key(mirror)] = name
+            paths[native_key(f"{mirror}.json")] = name
     return sorted(paths), paths, purges
 
 
 def protected_hit(path: str, folders: list[str]) -> str | None:
     """The protected path that path is, is inside, or is a folder above."""
     return next((folder for folder in folders if inside(path, folder) or inside(folder, path)), None)
+
+
+def expand_variables(word: str, variables: dict[str, str]) -> str:
+    """A word with the variables this line set, then the environment's, filled in; unknown ones stay as written."""
+    def value(match: re.Match[str]) -> str:
+        environment, shell, cmd = match.groups()
+        if shell and shell in variables:
+            return variables[shell]
+        return os.environ.get(environment or shell or cmd, match.group(0))
+    return VARIABLE.sub(value, word)
 
 
 def destroys_data(command: str, cwd: str, root: Path, folders: list[str], purges: list[str]) -> str | None:
@@ -190,12 +240,7 @@ def destroys_data(command: str, cwd: str, root: Path, folders: list[str], purges
     for app in purges:
         if re.search(rf"(?:^|[\s/'\"])cc\s+run\s+{re.escape(app)}(?:\s|$|['\";&|])", command):
             return f"./cc run {app}"
-    try:
-        lexer = shlex.shlex(command.replace("\\", "\\\\"), posix=True, punctuation_chars=";&|()<>")
-        lexer.whitespace_split = True
-        words = list(lexer)
-    except ValueError:
-        words = command.split()
+    words = shell_words(command, ";&|()<>")
     variables: dict[str, str] = {}
     groups: list[list[str]] = [[]]
     for word in words:
@@ -210,15 +255,27 @@ def destroys_data(command: str, cwd: str, root: Path, folders: list[str], purges
             name, value = group[0].split("=", 1)
             variables[name] = value
             group = group[1:]
-        group = [re.sub(r"\$\{?([A-Za-z_]\w*)\}?", lambda m: variables.get(m.group(1), os.environ.get(m.group(1), m.group(0))),
-                        word) for word in group]
+        group = [expand_variables(word, variables) for word in group]
+        if group and group[0] == "&":  # PowerShell's call operator
+            group = group[1:]
         if not group:
             continue
-        verb = posixpath.basename(group[0].replace("\\", "/")).lower()
-        if verb in ("cmd", "cmd.exe") and len(group) > 2 and group[1].lower() == "/c":
-            group, verb = group[2:], group[2].lower()
-        if verb == "cd" and len(group) > 1:
-            cwd = joined(cwd, group[1])
+        verb = program(group[0])
+        nested = None  # the command line another shell runs: bash -c, cmd /c, powershell -Command
+        if verb == "cmd" and len(group) > 2 and group[1].lower() in ("/c", "/k"):
+            nested = group[2:]
+        elif verb in POWERSHELLS:
+            flags = [index for index, word in enumerate(group) if word.lower() in ("-c", "-command")]
+            nested = group[flags[0] + 1:] if flags else None
+        elif verb in SHELLS and "-c" in group[1:-1]:
+            nested = [group[group.index("-c") + 1]]
+        if nested:
+            line = nested[0] if len(nested) == 1 else " ".join(f'"{word}"' if " " in word else word for word in nested)
+            hit = destroys_data(line, cwd, root, folders, purges)
+            if hit:
+                return hit
+        if verb in ("cd", "set-location", "sl", "pushd", "chdir") and len(group) > 1:
+            cwd = joined(cwd, next((word for word in group[1:] if not word.startswith("-")), "."))
             continue
         operands = [word for word in group[1:] if not word.startswith("-") and not re.fullmatch(r"/[A-Za-z]", word)]
         redirects = [group[index + 1] for index, word in enumerate(group[:-1]) if word in (">", ">>")]
@@ -233,15 +290,20 @@ def destroys_data(command: str, cwd: str, root: Path, folders: list[str], purges
                 return hit
             if any("*" in word or word == "." for word in operands) and protected_hit(cwd, folders):
                 return protected_hit(cwd, folders)
+        if verb in OVERWRITE_VERBS:
+            for word in operands:
+                hit = protected_hit(joined(cwd, word), folders)
+                if hit and inside(joined(cwd, word), hit):
+                    return hit
         if verb in COPY_VERBS and len(operands) >= 2:
             sources, target = operands[:-1], joined(cwd, operands[-1])
-            if verb in ("mv", "move-item", "move"):
+            if verb in MOVE_VERBS:
                 hit = next((found for word in sources if (found := protected_hit(joined(cwd, word), folders))), None)
                 if hit:
                     return hit
             for source in sources:
-                landing = posixpath.join(target, posixpath.basename(source.rstrip("/"))) \
-                    if operands[-1].endswith("/") or Path(target).is_dir() else target
+                landing = posixpath.join(target, posixpath.basename(source.replace("\\", "/").rstrip("/"))) \
+                    if operands[-1].endswith(("/", "\\")) or Path(target).is_dir() else target
                 hit = protected_hit(landing, folders)
                 if hit and (not inside(landing, hit) or Path(landing).exists()):
                     return hit
@@ -259,12 +321,8 @@ def destroys_data(command: str, cwd: str, root: Path, folders: list[str], purges
         if verb == "git" and "clean" in group and any(re.fullmatch(r"-[A-Za-z]*[xX][A-Za-z]*", word) for word in group):
             here = joined(cwd, ".")
             nested = (joined(str(root), "worktrees"), joined(str(root), "repos"))
-            if inside(here, path_key(str(root))) and not any(inside(here, folder) for folder in nested):
+            if inside(here, native_key(str(root))) and not any(inside(here, folder) for folder in nested):
                 return "git clean -x (it removes the ignored .cc-local)"
-        if verb in SHELLS and "-c" in group[1:-1]:
-            hit = destroys_data(group[group.index("-c") + 1], cwd, root, folders, purges)
-            if hit:
-                return hit
         if verb in INTERPRETERS and DESTRUCTIVE_CODE.search(" ".join(group[1:])):
             for token in re.findall(r"[\w.~:\\/$-]+", " ".join(group[1:])):
                 hit = protected_hit(joined(cwd, token), folders) if re.search(r"[/\\]", token) else None
@@ -330,7 +388,8 @@ def pre_bash(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
 COMMIT = re.compile(r"\bgit(?:\s+(?:-[Cc]\s+\S+|--\S+))*\s+commit\b")
 PUSH = re.compile(r"\bgit(?P<options>(?:\s+(?:-[Cc]\s+\S+|--\S+))*)\s+push\b(?P<rest>[^;&|\n]*)|\bgh\s+pr\s+create\b")
 GIT_DIRECTORY = re.compile(r"-C\s+(['\"]?)([^\s'\"]+)\1")
-CD = re.compile(r"(?:^|&&|;)\s*cd\s+(['\"]?)([^\s'\";&|]+)\1")
+CD = re.compile(r"(?:^|&&|;)\s*(?:cd|pushd|set-location|sl)\s+(?:-(?:literal)?path\s+)?(['\"]?)([^\s'\";&|]+)\1",
+                re.IGNORECASE)
 
 
 def push_repository(command: str, match: re.Match[str], cwd: Path) -> Path:
@@ -352,12 +411,12 @@ def unverified_push(command: str, cwd: Path, root: Path = ROOT) -> str | None:
                 "then push in a separate command, so the pushed tree can be checked against the passing runs.")
     repository = push_repository(command, match, cwd)
     try:
-        top = Path(verified.git(repository, "rev-parse", "--show-toplevel")).resolve()
+        top = hostos.long_path(verified.git(repository, "rev-parse", "--show-toplevel"))
         head = verified.git(repository, "rev-parse", "--short", "HEAD")
         tree = verified.commit_tree(repository)
     except (OSError, subprocess.CalledProcessError):
         return None  # not a Git repository here: nothing to compare
-    cc = root.resolve()
+    cc = hostos.long_path(root)
     if top != cc and cc not in top.parents:
         return None  # another project; the isolation hook covers it
     needed = ("check", "verify") if top == cc else ("verify",)
@@ -375,15 +434,17 @@ def unverified_push(command: str, cwd: Path, root: Path = ROOT) -> str | None:
 PATH_WORD = re.compile(r"^(?:\.\.(?:[/\\]|$)|~|/|[A-Za-z]:[/\\])")
 
 
-def resolve(cwd: Path, raw: str) -> Path:
-    path = Path(raw).expanduser()
-    return (path if path.is_absolute() else cwd / path).resolve()
+def resolve(cwd: Path | str, raw: str) -> Path:
+    """The canonical absolute path raw names from cwd: every spelling of one file gives the same Path (8.3 short names,
+    letter case on Windows, C:/ or C:\\, Git Bash /c/, symlinks and junctions; hostos.long_path)."""
+    path = Path(hostos.native_spelling(os.path.expanduser(raw)))
+    return hostos.long_path(path if path.is_absolute() else Path(hostos.native_spelling(str(cwd))) / path)
 
 
 def outside_cc(root: Path, path: Path) -> Path | None:
     """The folder next to this CC that path reaches into (another CC, an RC, a shared folder), or the
     projects folder itself; None inside the CC or anywhere else on the machine."""
-    root = root.resolve()
+    root = hostos.long_path(root)
     if path == root or root in path.parents:
         return None
     parent = root.parent
@@ -401,14 +462,8 @@ def outside_ask(sibling: Path) -> dict[str, Any]:
 def shell_paths(command: str) -> list[str]:
     """Words of a shell line that name a path outside the current folder (.., ~, absolute). Operators such as
     ; && | ( ) > split words even without spaces, so `cd <cc>; ...` is the path <cc>, not `<cc>;`."""
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        words = list(lexer)
-    except ValueError:
-        words = command.split()
     found = []
-    for word in words:
+    for word in shell_words(command, True):
         value = word.split("=", 1)[1] if word.startswith("-") and "=" in word else word
         if PATH_WORD.match(value):
             found.append(value)
@@ -435,17 +490,20 @@ def pre_read(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
 
 
 def relative_to_root(root: Path, event: dict[str, Any]) -> Path | None:
+    """The edited path relative to the CC, in the CC's own letter case (relative_parts compares it on Windows)."""
     tool_input = event.get("tool_input", {})
     raw = tool_input.get("file_path") or tool_input.get("notebook_path")
     if not raw:
         return None
-    path = Path(raw)
-    if not path.is_absolute():
-        path = Path(event.get("cwd") or root) / path
     try:
-        return path.resolve().relative_to(root.resolve())
+        return resolve(event.get("cwd") or root, raw).relative_to(hostos.long_path(root))
     except ValueError:
         return None  # outside the CC: a worktree, the scratchpad, memory
+
+
+def relative_parts(relative: Path) -> tuple[str, ...]:
+    """Parts to compare: in lower case where the file system ignores case (Windows), as written elsewhere."""
+    return tuple(os.path.normcase(part) for part in relative.parts)
 
 
 def git_ignored(root: Path, relative: Path) -> bool:
@@ -493,18 +551,19 @@ def pre_edit(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
     relative = relative_to_root(root, event)
     if relative is None:
         return None
-    if relative.parts[:2] == (".claude", "skills"):
+    parts = relative_parts(relative)
+    if parts[:2] == (".claude", "skills"):
         source = Path(".agents", *relative.parts[1:]).as_posix()
         return pre_tool("deny", f".claude/skills is a generated copy: edit {source} instead, then run ./cc agents sync.")
-    if relative.parts[:1] == ("repos",):
-        if relative.parts[1:2] == ("reference",):
+    if parts[:1] == ("repos",):
+        if parts[1:2] == ("reference",):
             return pre_tool("deny", f"{relative.as_posix()} is in a reference repo: read-only evidence for this CC, never "
                                     "changed here. Make the change in a project repo's feature worktree instead.")
         return pre_tool("deny", f"{relative.as_posix()} is in a base clone, which is never edited. Change code in a feature "
                                 "worktree: ./cc worktree create <feature> <repo>, then edit worktrees/<feature>/<repo>_wt.")
     # The kit's knowledge (docs/kit/decisions/0017-kit-and-project-layers.md): a CC carries an identical copy that a kit
     # update replaces. Only a CC has control-center.json; the template repository owns the kit and edits it freely.
-    if relative.parts[:2] == ("docs", "kit") and (root / "control-center.json").is_file():
+    if parts[:2] == ("docs", "kit") and (root / "control-center.json").is_file():
         return pre_tool("ask", f"{relative.as_posix()} belongs to the kit and is replaced on a kit update, so an edit here is "
                                "lost. To change kit behaviour for this CC, record its own decision in docs/decisions/ that "
                                "names the kit decision it overrides.")
@@ -526,7 +585,7 @@ def load_script(name: str) -> Any:
 def reference_repos(root: Path, event: dict[str, Any]) -> list[str]:
     """Ids of the reference repos (repos/reference/<id>) that a read, search or listing touched."""
     cwd = Path(event.get("cwd") or root)
-    base = (root / "repos" / "reference").resolve()
+    base = hostos.long_path(root / "repos" / "reference")
     found = []
     for raw in tool_paths(event) or ["."]:
         path = resolve(cwd, raw)
@@ -560,9 +619,10 @@ def post_read(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None
 
 def post_edit(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
     relative = relative_to_root(root, event)
-    if relative is None or relative.parts[:1] != ("docs",) or relative.suffix != ".md":
+    if relative is None or relative_parts(relative)[:1] != ("docs",) or relative.suffix != ".md":
         return None
-    errors = [error for error in load_script("validate-knowledge").validate(root) if error.startswith(f"{relative}:")]
+    errors = [error for error in load_script("validate-knowledge").validate(root)
+              if error.replace("\\", "/").startswith(f"{relative.as_posix()}:")]
     if not errors:
         return None
     return {"decision": "block", "reason": "This note breaks the knowledge rules (./cc validate will fail):\n"
@@ -603,16 +663,27 @@ HANDLERS = {"pre-bash": pre_bash, "pre-read": pre_read, "post-read": post_read, 
             "stop": stop, "session-start": session_start}
 
 
+# Hooks run with "onFailure": "block": any exit but 0 or 2, a crash or a timeout blocks the call. A gate that cannot
+# decide blocks on purpose (exit 2, which also blocks on older Claude Code); any other hook reports and lets the session
+# go on, since a blocking Stop hook could keep the agent in a loop.
+GATES = {"pre-bash", "pre-read", "pre-edit"}
+
+
 def main() -> int:
     if len(sys.argv) != 2 or sys.argv[1] not in HANDLERS:
         print(f"usage: rule_hooks.py <{'|'.join(HANDLERS)}>", file=sys.stderr)
-        return 1  # exit 2 would block the tool call
+        return 2
+    name = sys.argv[1]
     try:
         event = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
-        result = HANDLERS[sys.argv[1]](event)
-    except Exception as error:  # a broken hook must warn, never block the session
-        print(f"rule hook {sys.argv[1]} failed, rule NOT enforced: {error}", file=sys.stderr)
-        return 1
+        result = HANDLERS[name](event)
+    except Exception as error:
+        if name in GATES:
+            print(f"rule hook {name} failed, so the call is blocked: {error}. Fix scripts/rule_hooks.py or run "
+                  "./cc doctor.", file=sys.stderr)
+            return 2
+        print(json.dumps({"systemMessage": f"rule hook {name} failed: {error}"}))
+        return 0
     if result:
         print(json.dumps(result))
     return 0

@@ -21,8 +21,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hostos  # noqa: E402
 from backup import BRANCH, STAMP, data_root  # noqa: E402
-from disk import KIT_STATE, WALK_SECONDS, Runner, expand, human, run, tree_size, wsl_disk_folder  # noqa: E402
+from disk import KIT_STATE, WALK_SECONDS, Runner, expand, human, run, tree_size, windows_path, wsl_disk_folder  # noqa: E402
 
 STALE_DAYS = 7
 LARGE_UNDECLARED = 2**30
@@ -57,22 +58,28 @@ def configured_base(manifest: dict, env: dict[str, str], runner: Runner) -> Path
     return expand(path, env, runner) if path else None
 
 
+def canonical(path: str | Path) -> Path:
+    """One spelling per folder, so a folder recorded by backup and the one the settings name are listed once
+    (on Windows one folder may come with 8.3 short names, in another letter case or through a junction)."""
+    return hostos.long_path(hostos.native_spelling(str(path)))
+
+
 def backup_folders(root: Path, manifest: dict, env: dict[str, str], runner: Runner) -> list[Path]:
-    folders = {Path(path) for path in locations(root).get("backups", [])}
+    folders = {canonical(path) for path in locations(root).get("backups", [])}
     base = configured_base(manifest, env, runner)
     if base:
-        folders.add(base / (manifest.get("name") or root.name))
+        folders.add(canonical(base / (manifest.get("name") or root.name)))
     return sorted(folders)
 
 
 def mirrors(root: Path, manifest: dict, name: str, env: dict[str, str], runner: Runner) -> list[Path]:
     """Every folder that may hold this entry's mirror: those backup used, and the one the settings point to now."""
-    found = {Path(path) for path in (locations(root).get("mirrors") or {}).get(name, [])}
+    found = {canonical(path) for path in (locations(root).get("mirrors") or {}).get(name, [])}
     base = configured_base(manifest, env, runner)
     if base or (manifest.get("backup") or {}).get("dataPath"):
         try:
-            found.add(data_root(manifest, base or Path("/"), env, runner) / (manifest.get("name") or root.name)
-                      / "data" / name)
+            found.add(canonical(data_root(manifest, base or Path("/"), env, runner) / (manifest.get("name") or root.name)
+                                / "data" / name))
         except ValueError:
             pass
     return sorted(found)
@@ -103,23 +110,24 @@ def windows(path: Path, env: dict[str, str], runner: Runner) -> str:
 
 
 def place_warnings(path: Path, env: dict[str, str], runner: Runner) -> list[str]:
-    """A copy on the WSL disk's own drive does not survive that drive; one in OneDrive leaves the machine."""
-    if not env.get("WSL_DISTRO_NAME"):
-        return []
+    """A copy on the WSL disk's own drive does not survive that drive; one in OneDrive leaves the machine. OneDrive is
+    found on WSL (through cmd.exe) and on Windows (in the environment); Linux and macOS have neither."""
     found = []
-    drive = re.match(r"/mnt/([a-z])(/|$)", str(path))
+    drive = re.match(r"/mnt/([a-z])(/|$)", path.as_posix())
     disk_folder = wsl_disk_folder(env, runner)
     if drive and disk_folder and disk_folder[:1].lower() == drive.group(1):
         found.append(f"on drive {drive.group(1).upper()}:, the same drive as the WSL disk file; set backup.dataPath "
                      "to another drive to survive a drive failure")
     for variable in ("OneDrive", "OneDriveCommercial", "OneDriveConsumer"):
-        value = runner(["cmd.exe", "/c", f"echo %{variable}%"])
-        if not value or "%" in value:
-            continue
-        converted = runner(["wslpath", "-u", value.strip()])
-        synced = Path(converted.strip()) if converted else None
+        if env.get("WSL_DISTRO_NAME"):
+            value = (runner(["cmd.exe", "/c", f"echo %{variable}%"]) or "").strip()
+            converted = runner(["wslpath", "-u", value]) if value and "%" not in value else None
+            synced = Path(converted.strip()) if converted else None
+        else:
+            synced = windows_path(variable, env, runner)
+            value = str(synced)
         if synced and (path == synced or synced in path.parents):
-            found.append(f"inside OneDrive ({value.strip()}), so it leaves this machine")
+            found.append(f"inside OneDrive ({value}), so it leaves this machine")
     return found
 
 
@@ -251,7 +259,9 @@ def restore(root: Path, name: str, everything: bool, env: dict[str, str], runner
         names |= {path.relative_to(mirror).as_posix() for path in mirror.rglob("*")
                   if (path.is_file() or path.is_symlink()) and not path.name.endswith(".cc-tmp")}
     # Checked before anything is written: a restore never leaves half a folder because of a bad mirror.
-    unsafe = sorted(item for item in names if (mirror / item).is_symlink())
+    unsafe = sorted(item for item in names if any(part.is_symlink() or part.is_junction()
+                                                  for part in [mirror / item, *(mirror / item).parents]
+                                                  if mirror in part.parents))
     if unsafe:
         print(f"error: {unsafe[0]} is a symlink in the mirror; restore refuses it", file=out)
         return 1

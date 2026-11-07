@@ -31,7 +31,7 @@ Runner = Callable[[list[str]], "str | None"]
 def run(command: list[str]) -> str | None:
     """stdout of a command, or None when it is missing, fails or hangs."""
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return result.stdout if result.returncode == 0 else None
@@ -124,19 +124,23 @@ def local_section(root: Path, manifest: dict) -> list[str]:
     for path in others:
         size, text = measured(path)
         if size >= UNDECLARED_BYTES or text.startswith("more"):
-            lines.append(f"  undeclared {path.relative_to(local)}: {text}; declare it in localData or move it")
+            lines.append(f"  undeclared {path.relative_to(local).as_posix()}: {text}; declare it in localData or move it")
     scripts = [path for folder in others if folder.is_dir() for path in folder.rglob("*")
                if path.suffix.lower() in SCRIPT_SUFFIXES and path.is_file()]
     scripts += [path for path in others if path.is_file() and path.suffix.lower() in SCRIPT_SUFFIXES]
     for path in scripts[:20]:
-        lines.append(f"  script outside a repository: {path.relative_to(local)} (git does not track it)")
+        lines.append(f"  script outside a repository: {path.relative_to(local).as_posix()} (git does not track it)")
     if len(scripts) > 20:
         lines.append(f"  ... and {len(scripts) - 20} more scripts")
     return lines
 
 
-def windows_path(variable: str, runner: Runner) -> Path | None:
-    """%VARIABLE% from Windows as a WSL path, or None outside WSL."""
+def windows_path(variable: str, env: dict[str, str], runner: Runner) -> Path | None:
+    """%VARIABLE% from Windows: on WSL asked from cmd.exe and turned into a /mnt path, on Windows read from the
+    environment (names in any letter case, as Windows treats them), elsewhere None."""
+    if "WSL_DISTRO_NAME" not in env:
+        value = next((found for name, found in env.items() if name.upper() == variable.upper()), None)
+        return Path(value) if value else None
     value = runner(["cmd.exe", "/c", f"echo %{variable}%"])
     if not value or "%" in value:
         return None
@@ -160,7 +164,7 @@ def expand(path: str, env: dict[str, str], runner: Runner) -> Path | None:
     for variable in ("LOCALAPPDATA", "USERPROFILE"):
         token = f"%{variable}%"
         if path.startswith(token):
-            base = windows_path(variable, runner) if "WSL_DISTRO_NAME" in env else None
+            base = windows_path(variable, env, runner)
             return base.joinpath(*re.split(r"[\\/]", path[len(token):].strip("\\/"))) if base else None
     home = env.get("HOME", "~")
     cache = env.get("XDG_CACHE_HOME") or f"{home}/.cache"
@@ -181,7 +185,7 @@ def caches_section(manifest: dict, env: dict[str, str], runner: Runner) -> list[
             lines.append(f"  {name}: {declared} cannot be resolved here")
         elif not path.exists():
             lines.append(f"  {name}: none ({path})")
-        elif declared.startswith("%"):
+        elif declared.startswith("%") and "WSL_DISTRO_NAME" in env:
             lines.append(f"  {name}: {windows_size(path, runner)} ({path})")
         else:
             lines.append(f"  {name}: {measured(path)[1]} ({path})")

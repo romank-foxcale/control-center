@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+import hostos
 
 
 ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -50,16 +51,9 @@ def protect(checkout: Path, read_only: bool) -> None:
     """Make a reference clone's files and folders read-only on disk, or writable again for an update.
 
     The OS then refuses every writer (Claude, Codex, Cursor, a person), not only the ones that follow rules.
-    .git stays writable, so fetching still works."""
-    for directory, folders, files in os.walk(checkout):
-        folders[:] = [name for name in folders if not (directory == str(checkout) and name == ".git")]
-        for name in [*files, *folders]:
-            path = Path(directory) / name
-            if not path.is_symlink():
-                mode = path.stat().st_mode
-                path.chmod(mode & ~0o222 if read_only else mode | 0o200)
-    mode = checkout.stat().st_mode
-    checkout.chmod(mode & ~0o222 if read_only else mode | 0o200)
+    .git stays writable, so fetching still works. On Windows this is a deny-write ACL, since a read-only flag
+    neither closes folders nor survives a delete (hostos.write_protect)."""
+    hostos.write_protect(checkout, read_only, keep=".git")
 
 
 def descriptor_path(root: Path, identifier: str) -> Path:
@@ -344,11 +338,13 @@ def command_remove(root: Path, args: argparse.Namespace) -> None:
         raise ValueError(f"{args.id} is used by feature(s) {', '.join(features)}; remove those worktrees first")
     data = load_json(path)
     checkout = base_clone(root, args.id, data.get("kind", "project"))
+    if data.get("kind") == "reference" and checkout.is_dir():
+        protect(checkout, read_only=False)  # a clone outside the catalog is a stray to delete, not evidence to keep
     path.unlink()
     print(f"removed {args.id} from the catalog")
     if is_git_checkout(checkout):
-        print(f"note: the base clone {checkout} is kept, and ./cc repo strays reports it; delete it yourself if the repo is gone for good"
-              + (" (chmod -R u+w it first: it is read-only)" if data.get("kind") == "reference" else ""))
+        print(f"note: the base clone {checkout} is kept, writable, and ./cc repo strays reports it; delete it yourself "
+              "if the repo is gone for good")
     adapter = data.get("adapter")
     if adapter and (root / adapter).is_file():
         print(f"note: {adapter} and its flake input still exist; remove them if the repo is gone for good")

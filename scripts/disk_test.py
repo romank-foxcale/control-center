@@ -164,6 +164,19 @@ class Report(unittest.TestCase):
         self.assertIn("  gate: %LOCALAPPDATA%\\di-cc cannot be resolved here", self.report())
         self.assertIn(f"  gate: 3.0 GiB ({self.windows / 'di-cc'})", self.report(WSL_DISTRO_NAME="Ubuntu"))
 
+    def test_windows_folders_resolve_natively_on_windows(self) -> None:
+        """Native Windows has %LOCALAPPDATA% in its own environment, in any letter case: no cmd.exe, wslpath or
+        powershell.exe is asked, and the folder is measured by a walk."""
+        (self.windows / "di-cc" / "w.bin").write_bytes(b"x" * 2048)
+        self.commands.clear()
+        text = self.report(LocalAppData=str(self.windows))
+        self.assertIn(f"  gate: 2.0 KiB ({self.windows / 'di-cc'})", text)
+        self.assertFalse([command for command in self.commands if command[0] in ("cmd.exe", "wslpath", "env")])
+        profile = self.temp / "Пользователь с пробелом"
+        self.assertEqual(disk.expand("%USERPROFILE%\\cc backups\\данные", {"USERPROFILE": str(profile)}, self.runner),
+                         profile / "cc backups" / "данные")
+        self.assertIsNone(disk.expand("%USERPROFILE%\\b", {}, self.runner), "Linux and macOS have no %USERPROFILE%")
+
     def test_wsl_disk_of_this_distro(self) -> None:
         self.assertNotIn("WSL distro", self.report())
         text = self.report(WSL_DISTRO_NAME="Ubuntu")
