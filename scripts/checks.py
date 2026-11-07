@@ -128,13 +128,15 @@ def nix_extra(arguments: list[str], root: Path = ROOT) -> Result:
 
 def run(groups: list[Group], root: Path = ROOT,
         extra: Callable[[], Result] | None = None) -> tuple[int, list[Result]]:
-    """Run every group (and the extra, if any) in parallel; print one row each, in registry order, extra last."""
-    with ThreadPoolExecutor(max_workers=len(groups) + 1) as pool:
-        futures = [pool.submit(run_group, group, root) for group in groups]
-        extra_future = pool.submit(extra) if extra else None
-        results = [future.result() for future in futures]
-        if extra_future:
-            results.append(extra_future.result())
+    """Run the groups in parallel, then the extra, if any; print one row each, in registry order, extra last.
+
+    The extra waits for the groups: nix flake check beside them loads the machine enough to break timing-sensitive
+    tests (a stop-after-1-s test in hostos_test, the settings smoke test).
+    """
+    with ThreadPoolExecutor(max_workers=max(1, min(len(groups), os.cpu_count() or 1))) as pool:
+        results = list(pool.map(lambda group: run_group(group, root), groups))
+    if extra:
+        results.append(extra())
     width = max(len(result.name) for result in results)
     for result in results:
         print(f"{result.name:<{width}}  {result.status:<4}  {result.seconds:6.1f}s", flush=True)

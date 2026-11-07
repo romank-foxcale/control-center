@@ -105,7 +105,8 @@ class Forwarding(unittest.TestCase):
         result = subprocess.run([sys.executable, str(ROOT / "scripts" / "cc.py"), "plan", "list"],
                                 capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("LIFECYCLE", result.stdout)
+        # plans.py's own output: a table, or "no plans" in a clean clone without an active plan.
+        self.assertTrue("LIFECYCLE" in result.stdout or result.stdout == "no plans\n", result.stdout)
 
 
 class Shim(unittest.TestCase):
