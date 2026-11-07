@@ -13,7 +13,7 @@ evidence:
   - scripts/rule_hooks.py
   - scripts/eval/run.py
   - scripts/eval/scenarios.py
-  - scripts/eval/fixture.sh
+  - scripts/eval/fixture.py
 relations:
   - docs/kit/index.md
   - docs/kit/decisions/0005-multi-tool-agent-configs.md
