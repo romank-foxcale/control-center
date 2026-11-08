@@ -76,6 +76,7 @@
               rule-hooks = pkgs.runCommand "control-center-rule-hooks" { nativeBuildInputs = [ pkgs.git ]; } ''
                 export HOME=$TMPDIR
                 ${pkgs.python3}/bin/python ${self}/scripts/rule_hooks_test.py
+                ${pkgs.python3}/bin/python ${self}/scripts/hook_guard_test.py
                 touch "$out"
               '';
               trello = pkgs.runCommand "control-center-trello" { } ''

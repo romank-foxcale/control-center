@@ -163,11 +163,20 @@ class Shim(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def shim(self, *argv: str) -> subprocess.CompletedProcess[str]:
+    def shim(self, *argv: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         env = {**os.environ, "UV_PYTHON_INSTALL_DIR": str(ROOT / ".cc-local" / "tools" / "python")}
         command = ["cmd", "/c", str(self.copy / "cc.cmd")] if WINDOWS else [str(self.copy / "cc")]
         return subprocess.run([*command, *argv], capture_output=True, text=True, encoding="utf-8", env=env,
-                              timeout=600)
+                              timeout=600, input=stdin)
+
+    def test_a_hook_reaches_the_guard_even_with_a_broken_cli(self) -> None:
+        shutil.copy2(ROOT / "scripts" / "hook_guard.py", self.copy / "scripts" / "hook_guard.py")
+        (self.copy / "scripts" / "cc.py").write_text("this is not python\n", encoding="utf-8")
+        (self.copy / "scripts" / "rule_hooks.py").write_text("import missing_module\n", encoding="utf-8")
+        result = self.shim("hook", "pre-bash", stdin='{"tool_input": {"command": "git push"}}')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('"permissionDecision": "deny"', result.stdout)
+        self.assertIn("missing_module", result.stdout)
 
     def test_the_shim_runs_the_cli(self) -> None:
         result = self.shim("help")

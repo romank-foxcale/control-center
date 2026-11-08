@@ -53,4 +53,8 @@ fi
 
 export PYTHONUTF8=1 UV_PYTHON_PREFERENCE=only-managed
 export UV_PYTHON_INSTALL_DIR="$root/.cc-local/tools/python" UV_PROJECT_ENVIRONMENT="$root/.cc-local/venvs/$os"
-exec "$uv" run --locked --quiet --project "$root" python -B "$root/scripts/cc.py" "$@"
+# Claude Code runs every rule hook as `cc hook <event>`. It goes straight to the guard, not through cc.py, so an edit that
+# breaks cc.py or a rule module cannot block the Read and Edit that repair it (scripts/hook_guard.py).
+entry="$root/scripts/cc.py"
+if [ "${1:-}" = hook ]; then entry="$root/scripts/hook_guard.py"; shift; fi
+exec "$uv" run --locked --quiet --project "$root" python -B "$entry" "$@"

@@ -65,7 +65,7 @@ def registry(root: Path = ROOT) -> list[Group]:
         Group("agent-configs", [("scripts/agent-configs.py", ROOT_ARGUMENT, "check"), ("scripts/agent_configs_test.py",)]),
         Group("council", [("scripts/council/providers_test.py",), ("scripts/council/council_test.py",)],
               cwd="scripts/council"),
-        Group("rule-hooks", [("scripts/rule_hooks_test.py",)]),
+        Group("rule-hooks", [("scripts/rule_hooks_test.py",), ("scripts/hook_guard_test.py",)]),
         Group("trello", [("scripts/trello_test.py",)]),
         Group("events", [("scripts/events_test.py",), ("scripts/verify_test.py",)]),
         Group("repositories", [(f"scripts/{name}_test.py",) for name in (
