@@ -163,13 +163,59 @@ class Shim(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def shim(self, *argv: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
-        env = {**os.environ, "UV_PYTHON_INSTALL_DIR": str(ROOT / ".cc-local" / "tools" / "python")}
+    def shim(self, *argv: str, stdin: str | None = None, env: dict[str, str] | None = None
+             ) -> subprocess.CompletedProcess[str]:
+        env = {**os.environ, "UV_PYTHON_INSTALL_DIR": str(ROOT / ".cc-local" / "tools" / "python"), **(env or {})}
         command = ["cmd", "/c", str(self.copy / "cc.cmd")] if WINDOWS else [str(self.copy / "cc")]
         return subprocess.run([*command, *argv], capture_output=True, text=True, encoding="utf-8", env=env,
                               timeout=600, input=stdin)
 
+    def test_a_hook_on_a_cc_not_set_up_is_refused_at_once_without_a_download(self) -> None:
+        import json
+        import time
+        for missing in ("venv", "uv and venv"):
+            if missing == "uv and venv":
+                shutil.rmtree(self.uv_dir)
+            for event in ("pre-bash", "stop"):
+                with self.subTest(missing=missing, event=event):
+                    started = time.monotonic()
+                    result = self.shim("hook", event, stdin='{"tool_input": {"command": "ls"}}')
+                    elapsed = time.monotonic() - started
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    answer = json.loads(result.stdout)
+                    if event == "pre-bash":
+                        self.assertEqual(answer["hookSpecificOutput"]["permissionDecision"], "deny")
+                        text = answer["hookSpecificOutput"]["permissionDecisionReason"]
+                    else:
+                        text = answer["systemMessage"]
+                    self.assertIn("not set up on this machine yet: run ./cc doctor (or .\\cc.cmd doctor)", text)
+                    self.assertNotIn("downloading", result.stderr)
+                    self.assertLess(elapsed, 5, "a hook that is not set up must answer at once (under 2 s locally)")
+        self.assertEqual(sorted(path.name for path in (self.copy / ".cc-local").rglob("*")), ["tools", "uv"])
+
+    def test_a_user_uv_config_does_not_reach_the_cc(self) -> None:
+        config = Path(self.temporary.name) / "config"
+        (config / "uv").mkdir(parents=True)
+        (config / "uv" / "uv.toml").write_text("this is not toml\n", encoding="utf-8")
+        result = self.shim("help", env={"APPDATA": str(config), "XDG_CONFIG_HOME": str(config)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Usage: ./cc", result.stdout)
+
+    def test_a_multi_line_argument_reaches_the_cli_whole_or_is_refused(self) -> None:
+        (self.copy / "scripts" / "cc.py").write_text("import sys\nprint(repr(sys.argv[1:]))\n", encoding="utf-8")
+        text = 'line one\nline "two" & three'
+        result = self.shim("plan", text, "after")
+        if WINDOWS:  # cmd.exe would cut the command at the line break and drop the rest without a word
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertIn("an argument has a line break", result.stderr)
+            self.assertEqual(result.stdout, "")
+        else:
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), repr(["plan", text, "after"]))
+        self.assertEqual(self.shim("plan", "one line", "after").stdout.strip(), repr(["plan", "one line", "after"]))
+
     def test_a_hook_reaches_the_guard_even_with_a_broken_cli(self) -> None:
+        self.assertEqual(self.shim("help").returncode, 0)  # set the CC up, so the hook does not refuse at once
         shutil.copy2(ROOT / "scripts" / "hook_guard.py", self.copy / "scripts" / "hook_guard.py")
         (self.copy / "scripts" / "cc.py").write_text("this is not python\n", encoding="utf-8")
         (self.copy / "scripts" / "rule_hooks.py").write_text("import missing_module\n", encoding="utf-8")
