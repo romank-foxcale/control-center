@@ -242,9 +242,29 @@ def rename(source: str | os.PathLike[str], destination: str | os.PathLike[str], 
 
 def rmtree(path: str | os.PathLike[str], ignore_errors: bool = False) -> None:
     """shutil.rmtree that, on a permission error, makes the entry and its folder writable and tries once more:
-    Windows refuses to delete a file with the read-only flag, POSIX one in a folder without the write bit."""
+    Windows refuses to delete a file with the read-only flag, POSIX one in a folder without the write bit.
+    On Windows it first removes the deny-write ACE that write_protect puts on a read-only clone, from the entry and
+    each folder above it up to path, so a protected reference clone can be deleted."""
+    root = os.path.abspath(path)
+    lifted: set[str] = set()
+
+    def lift_deny(name: str) -> None:
+        target = os.path.abspath(name)
+        while target not in lifted:
+            lifted.add(target)
+            try:
+                _icacls(target, "/remove:d", _EVERYONE)
+            except (OSError, subprocess.CalledProcessError):
+                pass
+            parent = os.path.dirname(target)
+            if target == root or parent == target or not target.startswith(root):
+                break
+            target = parent
+
     def retry(function: Any, name: str, error: BaseException) -> None:
         if isinstance(error, PermissionError):
+            if WINDOWS:
+                lift_deny(name)
             for target in (os.path.dirname(name), name):
                 try:
                     mode = os.lstat(target).st_mode

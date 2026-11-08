@@ -183,6 +183,27 @@ class Rename(unittest.TestCase):
             self.assertFalse(source.exists())
 
 
+class RmtreeProtected(unittest.TestCase):
+    def test_a_write_protected_clone_is_deleted(self) -> None:
+        # A read-only reference clone: a deny-write ACE on Windows, cleared write bits on POSIX.
+        with tempfile.TemporaryDirectory() as temporary:
+            clone = Path(temporary) / "clone"
+            (clone / ".git").mkdir(parents=True)
+            (clone / ".git" / "HEAD").write_text("ref", encoding="utf-8")
+            (clone / "src" / "deep").mkdir(parents=True)
+            (clone / "src" / "deep" / "a.txt").write_text("a", encoding="utf-8")
+            (clone / "README").write_text("r", encoding="utf-8")
+            hostos.write_protect(clone, read_only=True)
+            try:
+                with self.assertRaises(PermissionError):
+                    (clone / "README").unlink()
+                hostos.rmtree(clone)
+                self.assertFalse(clone.exists())
+            finally:
+                if clone.exists():
+                    hostos.write_protect(clone, read_only=False)
+
+
 class CcCommand(unittest.TestCase):
     def test_it_runs_the_cli_with_this_interpreter(self) -> None:
         root = Path("/cc")
