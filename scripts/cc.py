@@ -266,7 +266,8 @@ def main(argv: list[str]) -> int:
         if command == "bootstrap":
             return bootstrap(arguments)
         if command == "hook":
-            return script("rule_hooks.py", *arguments, root=False)
+            # Through the guard, which still lets scripts/ be read and repaired when the rules cannot load.
+            return script("hook_guard.py", *arguments, root=False)
         if command == "open":
             return script("worktrees.py", "open", *arguments)
         if command == "eval":

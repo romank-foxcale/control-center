@@ -3,10 +3,14 @@ id: kit.decision.0013-rule-hooks
 title: Claude Code hooks enforce the hard rules early; the gates still decide
 status: accepted
 summary: The AGENTS.md hard rules that a tool call reveals are enforced by Claude Code hooks at the moment of the call, and every rule that leaves an artifact is also gated by ./cc check or ./cc verify, so other tools and missed hooks are still caught.
-verified_at: 2026-11-01
+verified_at: 2026-11-08
 evidence:
   - scripts/rule_hooks.py
   - scripts/rule_hooks_test.py
+  - scripts/hook_guard.py
+  - scripts/hook_guard_test.py
+  - cc
+  - cc.cmd
   - scripts/cc.py
   - scripts/agent-configs.py
   - scripts/validate-knowledge.py
@@ -31,7 +35,7 @@ The hard rules in `AGENTS.md` were instruction text only. Agents break them when
 
 ## Decision
 
-- `scripts/rule_hooks.py` holds the hook logic; `cc hook <event>` runs it with the Python pinned in `uv.lock` (plan native-core). Every hook entry sets `onFailure: block`: a gate hook (`pre-*`) that fails or times out blocks the call, and a non-gate hook reports its failure without blocking.
+- `scripts/rule_hooks.py` holds the hook logic; `cc hook <event>` runs it with the Python pinned in `uv.lock` (plan native-core), through `scripts/hook_guard.py`, which the shims call directly, not through `scripts/cc.py`. Every hook entry sets `onFailure: block`: a gate hook (`pre-*`) that fails or times out blocks the call, and a non-gate hook reports its failure without blocking.
 - `./cc agents sync` owns the `hooks` key of `.claude/settings.json` (every other key stays the user's); `./cc agents check` fails when it was edited by hand.
 - What each hook does and the gate behind it:
 
@@ -51,7 +55,7 @@ The hard rules in `AGENTS.md` were instruction text only. Agents break them when
   | A reference repo is guidance, not truth | after the first read of `repos/reference/<id>` in a session, add a note to check it against the project repos | none: it is judgement |
 
 - The `session-start` hook enforces no rule: it makes a CC that is not set up open with the setup interview ([0018](0018-setup-starts-itself.md)).
-- A hook that fails warns and never blocks (exit 1, not 2): a broken hook must not stop work, and the gate is still there.
+- When the rule hooks cannot load (a syntax error in `rule_hooks.py` or a module it imports), `hook_guard.py` decides alone, with the standard library only: it allows reads inside the CC and edits under `scripts/`, asks before a read outside the CC, denies every other edit and every shell command, and turns the reporting hooks into a message. Without it one broken file blocked every tool call, the Read and Edit that would repair it included, and only the user could fix it (2026-11-08, a null byte in `hostos.py`).
 
 ## Options considered
 
@@ -63,6 +67,7 @@ The hard rules in `AGENTS.md` were instruction text only. Agents break them when
 
 - A CC that keeps other committed Markdown, such as a `research/` folder of source material, lists it in `markdownDirs` (validated by the `bootstrap` check). The exception is per CC and visible, so the template's default stays strict.
 - Hooks exist only in Claude Code. Codex, Cursor and OpenCode rely on the gates.
+- The guard cannot help when `hook_guard.py` itself, the shim, `pyproject.toml` or `uv.lock` is broken: then every hook still blocks. These files are small and rarely edited; the user repairs them with `git checkout` in a terminal.
 - Hooks match shell text, so a command hidden in a script or another shell (`wsl.exe bash -lc ...`) passes the hook; only the gates are complete where a gate exists. For irreplaceable data the hook also cannot see a variable set by an earlier command, a delete inside a script file, or an alias; it reads `bash -c` strings and inline Python that deletes or writes, and variables set in the same line. A `/mnt/c/...`, `C:\...` and `\\wsl.localhost\...` spelling of one path count as the same path. CI runs `./cc check` on every pull request so the gates do not depend on someone running them ([0021](0021-cc-check-in-ci.md)).
 - New CCs get the hooks through `./cc bootstrap install`; existing CCs only through a migration.
 

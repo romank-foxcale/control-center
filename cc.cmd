@@ -15,5 +15,10 @@ set "PYTHONUTF8=1"
 set "UV_PYTHON_PREFERENCE=only-managed"
 set "UV_PYTHON_INSTALL_DIR=%ROOT%\.cc-local\tools\python"
 set "UV_PROJECT_ENVIRONMENT=%ROOT%\.cc-local\venvs\windows"
+rem A rule hook goes straight to the guard, so a broken cc.py cannot block its repair (scripts\hook_guard.py).
+if /i "%~1"=="hook" goto hook
 "%UV%" run --locked --quiet --project "%ROOT%" python -B "%ROOT%\scripts\cc.py" %*
+exit /b %errorlevel%
+:hook
+"%UV%" run --locked --quiet --project "%ROOT%" python -B "%ROOT%\scripts\hook_guard.py" %2
 exit /b %errorlevel%
