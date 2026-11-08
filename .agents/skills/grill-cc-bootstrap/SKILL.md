@@ -47,6 +47,8 @@ Always ask, never infer: "Which platforms does `<repo>` ship on: windows, linux,
 
 A target the user names but nobody can gate yet stays in `targets`; mark the repo `blocked` with that reason instead of dropping the target.
 
+Every gate above is Nix-defined until project adapters get a native backend (docs/kit/decisions/0033-native-core-nix-optional.md). The CC itself runs without Nix, but `./cc verify` runs a project gate only where the optional Nix extra is installed: Linux, macOS, or WSL on Windows. Tell the user this in plain words when their machine has no Nix, and never install it for them.
+
 ### Stack, static checks and quality gate
 
 Record the repo's languages with `--stack`, read from the code and confirmed with the user. Wire its existing test framework into the check.

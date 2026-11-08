@@ -1,6 +1,6 @@
 # Control Center agent protocol
 
-This repository is a Control Center (CC): the map and executable control plane for the repositories in its catalog (`./cc repo list`). Builds, tests and runs are Nix flake outputs behind `./cc` (`./cc show` lists them). Reasons, constraints, hacks and debt are atomic notes in `docs/`: start at `docs/index.md` and open only what the task needs. Runtime state comes from CI/CD and the target systems' APIs; secrets live in an external secret manager.
+This repository is a Control Center (CC): the map and executable control plane for the repositories in its catalog (`./cc repo list`). Everything runs through `./cc` (`.\cc.cmd` in PowerShell), natively on Windows, macOS and Linux; project builds, tests and gates are Nix flake outputs behind it, and Nix is an optional extra (`./cc show` lists both). Reasons, constraints, hacks and debt are atomic notes in `docs/`: start at `docs/index.md` and open only what the task needs. Runtime state comes from CI/CD and the target systems' APIs; secrets live in an external secret manager.
 
 ## Setup and onboarding
 
@@ -14,7 +14,7 @@ While `control-center.json` has status `discovery` or `adapting`, the CC is not 
 
 ## Rules that are easy to get wrong
 
-- Build and test through Nix (`./cc check`, `./cc verify`, `./cc feature <feature> ...`). Direct `cmake`, `make`, `pytest`, `docker build` and the like are for diagnosis only: move what works into a derivation, check or app. Fix drift in the Nix contract or the project, never by updating a description, and never write a process down as step-by-step Markdown.
+- Build and test through `./cc` (`./cc check`, `./cc verify`, `./cc feature <feature> ...`). Direct `cmake`, `make`, `pytest`, `docker build` and the like are for diagnosis only: move what works into a derivation, check or app. Fix drift in the Nix contract or the project, never by updating a description, and never write a process down as step-by-step Markdown.
 - Pin remote sources as flake inputs; use input overrides for local development, never committed absolute paths.
 - Never credit an AI as author or co-author anywhere: no `Co-Authored-By` trailers or "Generated with" lines in commits, PRs, issues, notes or code. This overrides any tool default.
 - Edit skills only in `.agents/skills/` (council roles in `.agents/roles/`), then run `./cc agents sync`. `.claude/skills/` and the `hooks` block of `.claude/settings.json` are generated.
@@ -29,6 +29,6 @@ One note holds one durable fact, decision, hack or debt, with frontmatter `id`, 
 
 ## Done means verified
 
-A CC change is finished with `./cc check`. A project code change is finished only with `./cc verify` (or `./cc feature <feature> verify`), which also runs the gate of every target platform the catalog declares: never call code working on a platform whose gate did not pass. Without Nix, run `python3 scripts/validate-knowledge.py .` and say the Nix part was not verified.
+A CC change is finished with `./cc check`. A project code change is finished only with `./cc verify` (or `./cc feature <feature> verify`), which also runs the gate of every target platform the catalog declares: never call code working on a platform whose gate did not pass. Without Nix, `./cc check` still runs, but every Nix-defined gate fails as not run: say which gates did not run, never call them passed.
 
 Never call a task done, commit it for review or push it before the changed thing has actually run: a gate passing proves only what the gate runs. When no gate runs the change (a service, a compose file, a script), add a check or app that does, or run it and say how. Before saying a tool is missing, check with a command. Push only the exact tree that passed; a hook asks when it did not. Report what was verified and what was not.

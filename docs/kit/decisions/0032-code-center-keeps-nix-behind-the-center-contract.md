@@ -1,9 +1,9 @@
 ---
 id: kit.decision.0032-code-center-keeps-nix-behind-the-center-contract
 title: code-center keeps Nix inside, in WSL, and joins the control-center hub only through the center contract
-status: accepted
+status: superseded
 summary: The kit, to be named code-center, becomes one center of the control-center hub (today the control-center-jarvis repository). It keeps Nix and therefore WSL for its builds, gates and pinning; the hub and the other centers stay Windows-native with uv and never depend on Nix. The hub reaches code-center only through the center-kit JSON contract.
-verified_at: 2026-11-02
+verified_at: 2026-11-08
 evidence:
   - flake.nix
   - cc
@@ -11,6 +11,7 @@ evidence:
   - docs/kit/rules/executable-processes.md
   - https://github.com/romank-foxcale/control-center-jarvis/blob/cf090a66782807740826ea938e301fe5fc6baa85/centers.json
 relations:
+  - docs/kit/decisions/0033-native-core-nix-optional.md
   - docs/kit/index.md
   - docs/kit/decisions/0006-target-platform-gates.md
   - docs/kit/decisions/0027-python-gate-venv-cache.md
@@ -18,6 +19,8 @@ relations:
 ---
 
 # code-center keeps Nix inside, in WSL, and joins the control-center hub only through the center contract
+
+> Superseded by [0033](0033-native-core-nix-optional.md): the core now runs natively and Nix is an optional extra. The boundary to the hub through the center contract stays.
 
 ## Context
 
