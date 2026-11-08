@@ -4,18 +4,22 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS))
+import hostos  # noqa: E402
+
+# Commands run from a neutral folder: git must not find the repository the test was started from (a worktree made
+# on Windows is not readable from WSL).
+NEUTRAL = Path(tempfile.gettempdir())
 
 
 def run(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(arguments, capture_output=True, text=True)
+    result = subprocess.run(arguments, capture_output=True, text=True, cwd=NEUTRAL)
     if check and result.returncode != 0:
         raise AssertionError(f"{arguments} failed:\n{result.stdout}{result.stderr}")
     return result
@@ -36,8 +40,14 @@ def bare_remote(base: Path, name: str, branch: str) -> str:
 
 
 def writable(path: Path) -> bool:
+    """Whether a file accepts a write, or a folder a new file: what the OS allows, not what a mode bit says
+    (os.access sees only the read-only flag on Windows, not an ACL)."""
     try:
-        path.write_text(path.read_text() + "x") if path.is_file() else (path / "new.txt").write_text("x")
+        if path.is_file():
+            path.write_text(path.read_text() + "x")
+        else:
+            (path / "new.txt").write_text("x")
+            (path / "new.txt").unlink()
         return True
     except PermissionError:
         return False
@@ -50,7 +60,13 @@ def check_reference_clone(base: Path, root: Path, repo) -> None:
     readme = clone / "README.md"
     assert readme.is_file(), "cloned with its files"
     assert not writable(readme) and not writable(clone) and not writable(clone / "docs"), "files and folders are read-only"
-    assert os.access(clone / ".git", os.W_OK), ".git stays writable so fetching works"
+    assert writable(clone / ".git"), ".git stays writable so fetching works"
+    try:
+        (clone / "docs" / "new.md").write_text("x")
+        raise AssertionError("a new file in a reference clone must be refused")
+    except PermissionError:
+        pass
+    assert readme.read_text() == "# acme-Shop-PoC\n", "protected files stay readable"
 
     source = base / "acme-Shop-PoC-src"
     (source / "README.md").write_text("# PoC\n\nversion 2\n")
@@ -112,13 +128,15 @@ def main() -> int:
         assert blocked.returncode != 0 and "demo" in blocked.stderr, blocked.stderr
         repo("remove", "acme-shop-poc")
         assert not (root / "catalog/repositories/acme-shop-poc.json").exists()
-        assert (root / "repos" / "reference" / "acme-shop-poc" / ".git").exists(), "remove never deletes the base clone"
+        kept = root / "repos" / "reference" / "acme-shop-poc"
+        assert (kept / ".git").exists(), "remove never deletes the base clone"
+        assert writable(kept) and writable(kept / "README.md"), "a removed reference clone is writable, so it can be deleted"
 
         # The kept clone is now outside the catalog: verify and doctor must say so.
         strays = repo("strays", check=False)
         assert strays.returncode != 0 and "acme-shop-poc" in strays.stderr, strays.stderr
-        run("chmod", "-R", "u+w", str(root / "repos" / "reference" / "acme-shop-poc"))
-        shutil.rmtree(root / "repos" / "reference" / "acme-shop-poc")
+        hostos.rmtree(kept)  # git marks pack files read-only, which Windows refuses to delete without help
+        assert not kept.exists()
         assert repo("strays").returncode == 0, "repos/ matches the catalog again"
         (root / "repos" / "scratch").mkdir()
         assert "scratch" in repo("strays", check=False).stderr, "only project/ and reference/ belong in repos/"

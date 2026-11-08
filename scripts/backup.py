@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hostos  # noqa: E402
 from disk import KIT_STATE, UNDECLARED_BYTES, WALK_SECONDS, Runner, expand, human, run, tree_size  # noqa: E402
 
 STAMP = re.compile(r"\d{8}-\d{6}")
@@ -38,8 +39,8 @@ MAX_FILE_BYTES = 95 * 10**6
 
 
 def git(directory: Path, *arguments: str, env: dict[str, str] | None = None) -> str:
-    return subprocess.run(["git", "-C", str(directory), *arguments], capture_output=True, text=True, check=True,
-                          env=env).stdout.strip()
+    return subprocess.run(["git", "-C", str(directory), *arguments], capture_output=True, text=True, encoding="utf-8",
+                          check=True, env=env).stdout.strip()
 
 
 def clones(root: Path) -> list[Path]:
@@ -61,8 +62,8 @@ def destination(root: Path, manifest: dict, to: str | None, env: dict[str, str],
         if resolved is None:
             raise ValueError(f"backup.path {configured} cannot be resolved here")
     else:
-        resolved = Path(to).expanduser()
-    resolved = resolved.resolve()
+        resolved = Path(hostos.native_spelling(to)).expanduser()
+    resolved = hostos.long_path(resolved)
     if resolved == root or root in resolved.parents:
         raise ValueError(f"{resolved} is inside the CC; a backup must live outside it")
     if env.get("WSL_DISTRO_NAME") and not re.match(r"/mnt/[a-z]/", f"{resolved}/"):
@@ -74,7 +75,8 @@ def changed_files(root: Path) -> list[str]:
     """Files that differ from HEAD (staged or not) and untracked files that are not ignored."""
     names: set[str] = set()
     for command in (["diff", "-z", "--name-only", "HEAD"], ["ls-files", "-z", "--others", "--exclude-standard"]):
-        output = subprocess.run(["git", "-C", str(root), *command], capture_output=True, text=True, check=True).stdout
+        output = subprocess.run(["git", "-C", str(root), *command], capture_output=True, text=True, encoding="utf-8",
+                                check=True).stdout
         names.update(output.split("\0"))
     return sorted(name for name in names if name and (root / name).is_file())
 
@@ -99,27 +101,19 @@ def prune(folder: Path, keep: int) -> list[Path]:
     backups = sorted(path for path in folder.iterdir() if path.is_dir() and STAMP.fullmatch(path.name))
     old = backups[:-keep] if len(backups) > keep else []
     for path in old:
-        shutil.rmtree(path)
+        hostos.rmtree(path)
     return old
 
 
 def pgrep(pattern: str) -> int | None:
-    """pgrep's exit status for a pattern: 0 found, 1 none, other an error; None when pgrep is missing."""
-    try:
-        return subprocess.run(["pgrep", "-f", pattern], capture_output=True, timeout=30).returncode
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+    """pgrep -f's exit status for a pattern: 0 found, 1 none, other an error; None when processes cannot be listed
+    (no pgrep; on Windows, where the process list comes from PowerShell, no answer from it)."""
+    return hostos.find_process(pattern)
 
 
 def windows_command_lines() -> list[str] | None:
     """Command lines of Windows processes; WSL pgrep does not see Python started from Windows (data-tags S2)."""
-    try:
-        result = subprocess.run(["powershell.exe", "-NoProfile", "-Command",
-                                 "Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }"],
-                                capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return result.stdout.splitlines() if result.returncode == 0 else None
+    return hostos.windows_command_lines()
 
 
 def busy(patterns: list[str], env: dict[str, str]) -> str | None:
@@ -129,7 +123,7 @@ def busy(patterns: list[str], env: dict[str, str]) -> str | None:
         if code == 0:
             return f"{pattern} is running"
         if code != 1:
-            return f"cannot check for {pattern} ({'pgrep not found' if code is None else f'pgrep exit {code}'})"
+            return f"cannot check for {pattern} ({'cannot list processes' if code is None else f'pgrep exit {code}'})"
     if patterns and env.get("WSL_DISTRO_NAME"):
         lines = windows_command_lines()
         if lines is None:
@@ -142,7 +136,7 @@ def busy(patterns: list[str], env: dict[str, str]) -> str | None:
 
 def drive_mounted(path: Path, mounts: str | None = None) -> bool:
     """A /mnt/<x>/ path must be on a mounted Windows drive: an unmounted /mnt/e is a plain folder inside the WSL disk."""
-    match = re.match(r"(/mnt/[^/]+)(/|$)", str(path))
+    match = re.match(r"(/mnt/[^/]+)(/|$)", path.as_posix())
     if not match:
         return True
     if mounts is None:
@@ -155,19 +149,20 @@ def data_root(manifest: dict, base: Path, env: dict[str, str], runner: Runner) -
     configured = (manifest.get("backup") or {}).get("dataPath")
     if not configured:
         return base
+    configured = hostos.native_spelling(configured)  # /mnt/c/... on native Windows is C:\...
     drive = re.match(r"([A-Za-z]):[\\/](.*)", configured)
-    if drive:
+    if drive and not os.path.isabs(configured):  # a Windows path seen from WSL
         return Path(f"/mnt/{drive.group(1).lower()}") / drive.group(2).replace("\\", "/")
-    resolved = configured if configured.startswith("/mnt/") else expand(configured, env, runner)
+    resolved = configured if configured.startswith("/mnt/") or os.path.isabs(configured) else expand(configured, env, runner)
     if resolved is None:
         raise ValueError(f"backup.dataPath {configured} cannot be resolved here")
-    return Path(resolved).resolve()
+    return hostos.long_path(resolved)
 
 
 def write_json(path: Path, value: dict) -> None:
     temporary = path.with_name(f".{path.name}.cc-tmp")
     temporary.write_text(json.dumps(value, indent=1), encoding="utf-8")
-    os.replace(temporary, path)
+    hostos.rename(temporary, path, replace=True)
 
 
 def same_file(source: os.stat_result, target: Path) -> bool:
@@ -189,7 +184,9 @@ def mirror(root: Path, entry: dict, folder: Path, stamp: str, env: dict[str, str
     if reason:
         raise ValueError(reason)
     files: dict[str, os.stat_result] = {}
-    for base, _, names in os.walk(source):  # os.walk does not follow symlinked folders
+    for base, folders, names in os.walk(source):
+        # A linked folder may point anywhere: os.walk skips symlinked folders, but on Windows it enters junctions.
+        folders[:] = [name for name in folders if not (Path(base) / name).is_junction()]
         for name in names:
             path = Path(base) / name
             if not path.is_symlink():
@@ -227,7 +224,7 @@ def mirror(root: Path, entry: dict, folder: Path, stamp: str, env: dict[str, str
             shutil.copy2(source / name, temporary)
             for attempt in range(5):  # Defender or the indexer may hold the target for a moment
                 try:
-                    os.replace(temporary, destination_file)
+                    hostos.rename(temporary, destination_file, replace=True)
                     break
                 except PermissionError:
                     if attempt == 4:
@@ -362,12 +359,12 @@ def main(argv: list[str], env: dict[str, str] | None = None, runner: Runner = ru
             for name in worktree_files:
                 archive.add(root / name, arcname=str(name))
     except (OSError, subprocess.CalledProcessError) as error:
-        shutil.rmtree(partial, ignore_errors=True)
+        hostos.rmtree(partial, ignore_errors=True)
         detail = getattr(error, "stderr", "") or error
         print(f"error: backup failed, earlier backups are unchanged: {str(detail).strip()}", file=out)
         return 1
     final = folder / stamp
-    partial.rename(final)
+    hostos.rename(partial, final)
     keep = (manifest.get("backup") or {}).get("keep", 5)
     removed = prune(folder, keep)
 

@@ -33,7 +33,7 @@ The kit is meant for people who know what a CC is for but not how it works. Gett
 
 ## Consequences
 
-- The `session-start` handler lives with the rule hooks, because `scripts/hook` and `./cc agents sync` already deliver hooks to Claude Code, but it enforces no rule and never blocks.
+- The `session-start` handler lives with the rule hooks, because `cc hook` and `./cc agents sync` already deliver hooks to Claude Code, but it enforces no rule and never blocks.
 - The template has no `control-center.json`, so the hook stays quiet while the kit itself is edited.
 - The opening prompts live in `install/cc-kit`. Renaming `grill-cc-bootstrap` means changing them, the hook text and the `AGENTS.md` rule.
 - The `RunOnce` entry and the PATH entry are the only changes the installer makes to Windows user settings outside WSL.

@@ -16,7 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 
-# What each run proves: ./cc check builds the flake checks only; ./cc verify also runs every target gate.
+# What each run proves: ./cc check runs the CC's checks only; ./cc verify also runs every target gate.
 KINDS = ("check", "verify")
 
 
@@ -50,9 +50,9 @@ def commit_tree(repository: Path, revision: str = "HEAD") -> str:
     return git(repository, "rev-parse", f"{revision}^{{tree}}")
 
 
-def record(root: Path, repository: Path, kind: str) -> str:
-    """Stamp the tree `repository` has on disk as passed by `kind`; returns the tree."""
-    tree = working_tree(repository)
+def record(root: Path, repository: Path, kind: str, tree: str | None = None) -> str:
+    """Stamp `tree` (by default the tree `repository` has on disk now) as passed by `kind`; returns the tree."""
+    tree = tree or working_tree(repository)
     directory = stamps(root)
     directory.mkdir(parents=True, exist_ok=True)
     stamp = directory / tree

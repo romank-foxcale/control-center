@@ -113,6 +113,21 @@ def check_writer_history(base: Path) -> None:
     assert "- Files it changed: none" in history.split("## Attempt 2")[1], "an attempt that changed nothing says so"
 
 
+def check_verify_runs_the_cc_cli(base: Path) -> None:
+    """verify starts the CC's CLI through the interpreter (Windows cannot start the extensionless shim) and reads
+    its UTF-8 output and the result table."""
+    run = make_run(base, "verify")
+    cli = run.root / "scripts" / "cc.py"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("import os, sys\nsys.stdout.reconfigure(encoding='utf-8')\n"
+                   "print('args:', *sys.argv[1:], '✓', os.environ['CC_EVENTS'].endswith('events.jsonl'))\n"
+                   "print('REPO\\tGATE\\tRESULT\\napi\\ttests\\tpass')\n", encoding="utf-8")
+    ok, output, rows = run.verify("0")
+    assert ok and rows == [("api", "tests", "pass")], (ok, output)
+    assert "args: feature f verify api --quality --full ✓ True" in output, output
+    assert (run.directory / "verify-0.log").read_text(encoding="utf-8") == output
+
+
 def check_catalog_rules() -> None:
     """The shipped templates validate, a writing Cursor role does not, and security takes a list or one role."""
     template = Path(__file__).resolve().parent.parent.parent
@@ -301,6 +316,7 @@ def main() -> int:
         assert reason == "security review blocks the change; see security.md"
 
         check_writer_history(base)
+        check_verify_runs_the_cc_cli(base)
         check_review_lessons(base)
         check_risk_council(base)
 

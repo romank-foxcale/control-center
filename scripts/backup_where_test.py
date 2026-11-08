@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import backup  # noqa: E402
 import backup_where  # noqa: E402
 import disk  # noqa: E402
+import hostos  # noqa: E402
 
 REG = "\r\n".join([
     r"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Lxss\{bbbb}",
@@ -37,6 +38,16 @@ def git(directory: Path, *arguments: str) -> str:
 def hashes(root: Path) -> dict[str, str]:
     return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+def link_folder(link: Path, target: Path) -> None:
+    """A symlink to a folder, or a junction where Windows refuses symlinks (no Developer Mode): both point outside."""
+    target.mkdir(exist_ok=True)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
 
 
 def runner(command: list[str]) -> str | None:
@@ -72,6 +83,10 @@ class Where(unittest.TestCase):
         (self.source / "deep/b.parquet").write_bytes(b"b" * 50)
         self.home = self.temp / "home"
         self.mirror = self.home / "b/my-cc/data/embeddings"
+        # Inputs keep the spelling tempfile gives (8.3 short names on Windows); output names each folder once, in
+        # its canonical spelling.
+        self.shown = hostos.long_path(self.temp)
+        self.shown_mirror = self.shown / "home/b/my-cc/data/embeddings"
 
     def write_manifest(self) -> None:
         (self.root / "control-center.json").write_text(json.dumps(self.manifest))
@@ -100,10 +115,11 @@ class Where(unittest.TestCase):
         status, text = self.where()
         self.assertEqual(status, 0, text)
         [stamp] = [path.name for path in (self.home / "b/my-cc").iterdir() if backup.STAMP.fullmatch(path.name)]
-        self.assertIn(f"{self.home / 'b/my-cc'}: newest {stamp}", text)
+        self.assertIn(f"{self.shown / 'home/b/my-cc'}: newest {stamp}", text)
+        self.assertEqual(text.count(": newest "), 1, "one folder, one line, whatever spelling recorded it")
         self.assertIn("restore: git clone cc.bundle <dir>", text)
         self.assertIn("embeddings (irreplaceable, sensitive): complete sync", text)
-        self.assertIn(f"mirror {self.mirror}: 2 files, 150 B, 0 orphans", text)
+        self.assertIn(f"mirror {self.shown_mirror}: 2 files, 150 B, 0 orphans", text)
         self.assertIn("compared by size and time, not checksums", text)
         self.assertIn("restore: ./cc backup restore embeddings", text)
         self.assertIn("features: not backed up; rebuild with ./cc run flar-replay, needs nothing", text)
@@ -115,8 +131,9 @@ class Where(unittest.TestCase):
         self.backup("--to", str(self.temp / "elsewhere"))
         git(self.root, "remote", "add", "origin", "git@github.com:me/my-cc.git")
         status, text = self.where()
-        self.assertIn(str(self.temp / "elsewhere/my-cc"), text)
-        self.assertIn(f"mirror {self.temp / 'elsewhere/my-cc/data/embeddings'}", text)
+        self.assertIn(str(self.shown / "elsewhere/my-cc"), text)
+        self.assertIn(f"mirror {self.shown / 'elsewhere/my-cc/data/embeddings'}", text)
+        self.assertEqual(text.count(": newest "), 2, text)
         self.assertIn("https://github.com/me/my-cc/tree/cc-backup", text)
         self.assertIn("no cc-backup branch known here", text)
 
@@ -162,10 +179,20 @@ class Where(unittest.TestCase):
         self.assertEqual(backup_where.place_warnings(Path("/mnt/e/cc/data/embeddings"), env, runner), [])
         self.assertEqual(backup_where.place_warnings(Path("/mnt/c/x"), {}, runner), [])  # not WSL: nothing to compare
 
+    def test_onedrive_warning_on_windows(self) -> None:
+        """Native Windows names OneDrive in its environment (any letter case); no cmd.exe or wslpath is asked."""
+        synced = self.temp / "OneDrive - Firma"
+        asked = []
+        env = {"ONEDRIVE": str(synced)}
+        warnings = backup_where.place_warnings(synced / "cc-backups" / "данные", env, lambda command: asked.append(command))
+        self.assertEqual(warnings, [f"inside OneDrive ({synced}), so it leaves this machine"])
+        self.assertEqual(backup_where.place_warnings(self.temp / "cc-backups", env, runner), [])
+        self.assertEqual(asked, [])
+
     def test_windows_paths_on_wsl(self) -> None:
         self.backup()
         status, text = self.where(WSL_DISTRO_NAME="Ubuntu")
-        self.assertIn(f"C:\\fake{str(self.mirror).replace('/', chr(92))}", text)
+        self.assertIn(f"C:\\fake{str(self.shown_mirror).replace('/', chr(92))}", text)
 
     def test_large_undeclared_data_is_warned(self) -> None:
         (self.root / ".cc-local/opensearch").mkdir(parents=True)
@@ -210,7 +237,7 @@ class Where(unittest.TestCase):
         shutil.rmtree(self.source)
         status, text = self.restore("embeddings")
         self.assertEqual(status, 0, text)
-        self.assertIn(f"from {self.temp / 'elsewhere/my-cc/data/embeddings'}", text)
+        self.assertIn(f"from {self.shown / 'elsewhere/my-cc/data/embeddings'}", text)
         self.assertTrue((self.source / "new.parquet").is_file())
 
     def test_a_first_sync_that_never_completed(self) -> None:
@@ -233,10 +260,19 @@ class Where(unittest.TestCase):
         self.assertEqual(status, 1, text)
         self.assertIn("missing in the mirror: a.parquet", text)
         self.assertFalse(self.source.exists())  # nothing written
-        (self.mirror / "a.parquet").symlink_to(self.temp / "outside")
+        link_folder(self.mirror / "a.parquet", self.temp / "outside")
         status, text = self.restore("embeddings")
         self.assertEqual(status, 1, text)
         self.assertIn("a.parquet is a symlink", text)
+        self.assertFalse(self.source.exists())
+        (self.mirror / "a.parquet").rmdir() if (self.mirror / "a.parquet").is_junction() else (self.mirror / "a.parquet").unlink()
+        (self.mirror / "a.parquet").write_bytes(b"a" * 100)
+        hostos.rmtree(self.mirror / "deep")
+        link_folder(self.mirror / "deep", self.temp / "outside")  # a linked folder above a file
+        (self.temp / "outside" / "b.parquet").write_bytes(b"b" * 50)
+        status, text = self.restore("embeddings")
+        self.assertEqual(status, 1, text)
+        self.assertIn("deep/b.parquet is a symlink", text)
         self.assertFalse(self.source.exists())
 
     def test_doctor_summary(self) -> None:

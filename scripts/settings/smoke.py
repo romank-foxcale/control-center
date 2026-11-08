@@ -85,6 +85,11 @@ async def check(root: Path) -> None:
         await pilot.pause()
         assert not isinstance(app.screen, ModelPicker)
 
+        # Every change runs the CC's CLI through the interpreter: Windows cannot start the extensionless shim.
+        write(root / "scripts" / "cc.py", "import sys\nsys.stdout.reconfigure(encoding='utf-8')\nprint('ran', *sys.argv[1:], '✓')\n")
+        ran = app.run_cc(("repo", "list"))
+        assert ran.returncode == 0 and ran.stdout.strip() == "ran repo list ✓", ran
+
         # Trello: the board and list mapping are picked, then connected through ./cc trello connect.
         trello = dict((row[0].plain, row[1].plain) for row in (app.query_one("#t-trello", DataTable).get_row_at(i) for i in range(4)))
         assert trello["board"] == "not connected" and trello["credentials"].startswith("missing"), trello
@@ -151,6 +156,10 @@ async def check(root: Path) -> None:
         await pilot.click("#ok")
         await pilot.pause()
         assert sent == [("repo", "remove", "app")], sent
+
+        # Shutdown removes the panel's widgets while the 1 s refresh timer can still fire; that refresh must do nothing.
+        await app.query_one("#top").remove()
+        app.action_refresh()
 
     text = show(snapshot(root))
     for expected in ("x_CC · ready", "1 waiting for you", "AGENTS", "judge", "COUNCILS", "approval on", "REPOS", "csharp", "develop", "reference", "TRELLO", "not connected"):

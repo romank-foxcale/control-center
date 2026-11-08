@@ -3,14 +3,17 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
+import hostos
 import rule_hooks
 import verified
 from rule_hooks import ai_attribution, markdown_allowed, nix_bypass, post_edit, pre_bash, pre_edit, stop
@@ -183,6 +186,9 @@ def check_reference_repos(base: Path) -> None:
 
 
 def check_cli() -> None:
+    """Hooks run with onFailure block: any exit but 0 or 2 blocks the call. A gate that fails blocks on purpose with
+    exit 2 and says why; a failing non-gate hook reports through systemMessage and exits 0, so it never traps the
+    session (a blocking Stop hook could loop)."""
     event = json.dumps({"tool_input": {"command": "cmake .."}})
     result = subprocess.run([sys.executable, str(SCRIPT), "pre-bash"], input=event.encode(), capture_output=True)
     assert result.returncode == 0 and json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "ask"
@@ -190,7 +196,131 @@ def check_cli() -> None:
                              capture_output=True)
     assert allowed.returncode == 0 and allowed.stdout == b"", "silence lets the normal permission flow decide"
     broken = subprocess.run([sys.executable, str(SCRIPT), "pre-bash"], input=b"not json", capture_output=True)
-    assert broken.returncode == 1 and b"NOT enforced" in broken.stderr, "a broken hook warns and never blocks (exit 2)"
+    assert broken.returncode == 2 and b"pre-bash failed, so the call is blocked" in broken.stderr, broken.stderr
+
+    # Each handler made to raise, as a bug in it would.
+    failing = ("import sys; sys.path.insert(0, sys.argv[1]); import rule_hooks\n"
+               "def broken(event):\n    raise RuntimeError('boom')\n"
+               "rule_hooks.HANDLERS[sys.argv[2]] = broken\nsys.argv = ['rule_hooks.py', sys.argv[2]]\n"
+               "raise SystemExit(rule_hooks.main())")
+    for event_name in rule_hooks.HANDLERS:
+        ran = subprocess.run([sys.executable, "-c", failing, str(SCRIPT.parent), event_name], input="{}",
+                             capture_output=True, text=True)
+        if event_name in ("pre-bash", "pre-read", "pre-edit"):
+            assert ran.returncode == 2 and ran.stdout == "", (event_name, ran)
+            assert ran.stderr.strip() == f"rule hook {event_name} failed, so the call is blocked: boom. Fix " \
+                                         "scripts/rule_hooks.py or run ./cc doctor.", (event_name, ran.stderr)
+        else:
+            assert ran.returncode == 0, (event_name, ran)
+            assert json.loads(ran.stdout) == {"systemMessage": f"rule hook {event_name} failed: boom"}, (event_name, ran)
+    for arguments in ([], ["no-such-event"], ["pre-bash", "extra"]):
+        usage = subprocess.run([sys.executable, str(SCRIPT), *arguments], input="{}", capture_output=True, text=True)
+        assert usage.returncode == 2 and usage.stderr.startswith("usage: rule_hooks.py <pre-bash|"), (arguments, usage)
+
+
+def short_name(path: Path) -> str | None:
+    """The 8.3 spelling Windows gives an existing path (C:\\Users\\KOZYRE~1\\...), or None where there is none."""
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return None
+    size = windll.kernel32.GetShortPathNameW(str(path), None, 0)
+    buffer = ctypes.create_unicode_buffer(size)
+    windll.kernel32.GetShortPathNameW(str(path), buffer, size)
+    return buffer.value if buffer.value and buffer.value != str(path) else None
+
+
+def link_folder(link: Path, target: Path) -> None:
+    """A symlink to a folder, or a junction where Windows refuses symlinks (no Developer Mode)."""
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+
+
+def spellings(folder: Path, tail: str, link: Path | None = None) -> list[str]:
+    """Every spelling this machine accepts for folder/tail: as given, 8.3 short names, the other slash, the other
+    letter case (only where the file system ignores case), Git Bash /c/... (only where it maps to a drive), through a
+    link that points at folder, and relative with .. from the folder next to it."""
+    plain = str(folder / tail)
+    found = [plain, plain.replace("\\", "/")]
+    short = short_name(folder)
+    if short:
+        found += [str(Path(short) / tail), str(Path(short) / tail).upper()]
+    swapped = str(folder).swapcase()
+    if os.path.exists(swapped) and os.path.samefile(swapped, folder):
+        found.append(str(Path(swapped) / tail))
+    drive = re.match(r"^([A-Za-z]):[\\/](.*)$", plain)
+    if drive:
+        bash = f"/{drive.group(1).lower()}/{drive.group(2).replace(chr(92), '/')}"
+        if hostos.native_spelling(bash) != bash:
+            found.append(bash)
+    if link:
+        found.append(str(link / tail))
+    return list(dict.fromkeys(found))
+
+
+def check_path_spellings(base: Path) -> None:
+    """A protected action is refused with every spelling of its path and in Bash, PowerShell and cmd forms; a valid
+    action passes with every spelling. On Windows the fixture folders get 8.3 names and links are junctions."""
+    projects = base / "Long Projects Folder"
+    root = projects / "alpha_control_CC"
+    poc = root / "repos" / "reference" / "shop-poc-reference"
+    (poc / "src").mkdir(parents=True)
+    (root / "worktrees" / "feature" / "api_wt").mkdir(parents=True)
+    (projects / "beta_control_CC" / "docs").mkdir(parents=True)
+    emb = root / ".cc-local" / "data" / "embeddings-store"
+    emb.mkdir(parents=True)
+    (emb / "part.parquet").write_bytes(b"x")
+    (root / "control-center.json").write_text(json.dumps({"name": "alpha", "localData": [
+        {"name": "emb", "path": ".cc-local/data/embeddings-store", "tags": ["irreplaceable"]}]}), encoding="utf-8")
+    links = base / "links"
+    links.mkdir()
+    link_folder(links / "poc", poc)
+    link_folder(links / "emb", emb)
+    link_folder(links / "beta", projects / "beta_control_CC")
+
+    def edit(path: str, tool: str = "Write") -> str | None:
+        return decision(rule_hooks.pre_edit({"tool_name": tool, "tool_input": {"file_path": path}, "cwd": str(root)}, root))
+
+    def shell(command: str) -> str | None:
+        return decision(rule_hooks.pre_bash({"tool_input": {"command": command}, "cwd": str(root)}, root))
+
+    def read(path: str) -> str | None:
+        return decision(rule_hooks.pre_read({"tool_name": "Read", "tool_input": {"file_path": path}, "cwd": str(root)}, root))
+
+    for path in spellings(poc, "src/App.cs", links / "poc"):
+        assert edit(path) == "deny", f"writing into a reference repo: {path}"
+    for path in spellings(emb, "part.parquet", links / "emb"):
+        assert edit(path) == "deny", f"writing into irreplaceable data: {path}"
+    for path in spellings(emb, "", links / "emb"):
+        path = path.rstrip("\\/")
+        unquoted = [] if " " in path else [f"rm -rf {path}", f'cmd /c "rmdir /s /q {path}"']
+        for command in (*unquoted, f"rm -rf '{path}'", f'Remove-Item -LiteralPath "{path}" -Recurse -Force',
+                        f"Remove-Item -Recurse -Force -Path '{path}'", f"& Remove-Item '{path}'",
+                        f"cmd.exe /c rd /s /q \"{path}\"", f"powershell -NoProfile -Command \"Remove-Item -Recurse '{path}'\"",
+                        f"pwsh -c 'Remove-Item -Recurse \"{path}\"'", f"Set-Content -Path '{path}/part.parquet' -Value x",
+                        f"Move-Item '{path}' C:/elsewhere", f"Rename-Item '{path}' old"):
+            assert shell(command) == "deny", command
+    for path in spellings(projects / "beta_control_CC", "docs/x.md", links / "beta"):
+        assert read(path) == "ask", f"another project: {path}"
+        assert shell(f"Get-Content -LiteralPath '{path}'") == "ask", path
+    for path in spellings(root / "worktrees" / "feature" / "api_wt", "App.cs"):
+        assert edit(path) is None, f"a worktree is where code changes: {path}"
+        assert read(path) is None, path
+    for path in spellings(emb, "part.parquet", links / "emb"):
+        assert shell(f"Get-Content -LiteralPath '{path}'") in (None, "ask"), f"reading data is fine: {path}"
+        assert shell(f"Copy-Item '{path}' C:/tmp/part.parquet") in (None, "ask"), path
+
+
+def check_command_paths() -> None:
+    """Paths in PowerShell and cmd lines keep their backslashes; Windows tool names match in any case and suffix."""
+    for command, tool in ((r"C:\Tools\CMake\bin\CMake.EXE --build build", "cmake"), (r"& 'C:\Program Files\x\ninja.exe'", "ninja"),
+                          ("py -m pytest tests", "python -m pytest"), (r"Set-Location C:\x; msbuild app.sln", "msbuild")):
+        assert nix_bypass(command) == tool, (command, nix_bypass(command))
+    assert rule_hooks.shell_paths(r"git -C C:\Users\me\beta_CC log") == [r"C:\Users\me\beta_CC"]
+    assert rule_hooks.shell_paths(r"Get-ChildItem -LiteralPath 'D:\data folder\x'") == [r"D:\data folder\x"]
+    assert rule_hooks.shell_paths("cat '/tmp/a b'") == ["/tmp/a b"]
 
 
 def check_attributed_commits(base: Path) -> None:
@@ -402,17 +532,27 @@ def check_protected_data(base: Path) -> None:
     (root / "control-center.json").write_text("{broken", encoding="utf-8")
     assert run(f"rm -rf {mirror}") == "deny", "the locations file still protects the mirror"
 
-    started = time.monotonic()
-    for _ in range(100):
-        run("ls -la .cc-local/data/emb && rm -rf /tmp/x")
-    assert time.monotonic() - started < 5, "the hook must stay fast: no subprocess per call"
+    # The hook must stay fast: no subprocess per call. Counted, not timed: a parallel ./cc check loads the machine
+    # enough on Windows to push 100 in-process calls past a tight wall-clock limit.
+    def no_subprocess(*arguments: object, **keywords: object) -> None:
+        raise AssertionError(f"the hook started a subprocess: {arguments[:1]}")
+    started, real_popen = time.monotonic(), subprocess.Popen
+    subprocess.Popen = no_subprocess  # type: ignore[assignment,misc]
+    try:
+        for _ in range(100):
+            run("ls -la .cc-local/data/emb && rm -rf /tmp/x")
+    finally:
+        subprocess.Popen = real_popen  # type: ignore[misc]
+    assert time.monotonic() - started < 30, "100 hook calls took over 30 s"
 
 
 def main() -> int:
     check_nix_bypass()
+    check_command_paths()
     check_markdown_allowlist()
     with tempfile.TemporaryDirectory() as directory:
         base = Path(directory)
+        check_path_spellings(base)
         check_attribution(base)
         check_edits(base / "cc")
         check_attributed_commits(base)

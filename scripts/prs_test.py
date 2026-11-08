@@ -60,6 +60,8 @@ def main() -> int:
         bin_dir.mkdir()
         (bin_dir / "gh").write_text(FAKE_GH)
         (bin_dir / "gh").chmod(0o755)
+        if os.name == "nt":  # Windows finds commands by PATHEXT, not by a shebang
+            (bin_dir / "gh.cmd").write_text(f'@"{sys.executable}" "%~dp0gh" %*\r\n')
         log, pulls = base / "gh.log", base / "pulls.json"
         pulls.write_text(json.dumps({
             "acme/acme-Shop-frontend": [pr(7, "2026-10-01T10:00:00Z", isDraft=True)],

@@ -6,9 +6,13 @@ import json
 import os
 import re
 import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import hostos  # noqa: E402
 
 
 TERMINAL = {"done", "rejected", "verify-failed", "blocked-security", "failed"}
@@ -23,15 +27,10 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def alive(pid: Any) -> bool:
+    """True while the process that last advanced a run still runs; no valid pid means not alive."""
     if not isinstance(pid, int) or pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return hostos.alive(pid)
 
 
 def run_status(state: dict[str, Any]) -> str:

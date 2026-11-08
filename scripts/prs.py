@@ -15,6 +15,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import hostos  # noqa: E402
+
 FIELDS = "number,title,author,createdAt,updatedAt,isDraft,reviewDecision,url,baseRefName,headRefName"
 GITHUB = re.compile(r"github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?/?$")
 TRELLO_CARD = re.compile(r"https://trello\.com/c/[A-Za-z0-9]+(?:/[^\s)\]>]*)?")
@@ -48,10 +51,15 @@ def review(pr: dict[str, Any]) -> str:
     )
 
 
+def gh_path() -> str:
+    """gh resolved on PATH, so a gh.cmd (a test fake on Windows) is found as well as gh.exe."""
+    return hostos.resolve_exe("gh") or "gh"
+
+
 def fetch(slug: str) -> list[dict[str, Any]]:
     result = subprocess.run(
-        ["gh", "pr", "list", "--repo", slug, "--state", "open", "--limit", "100", "--json", FIELDS],
-        capture_output=True, text=True, timeout=120,
+        [gh_path(), "pr", "list", "--repo", slug, "--state", "open", "--limit", "100", "--json", FIELDS],
+        capture_output=True, text=True, encoding="utf-8", timeout=120,
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"gh pr list failed for {slug}")
@@ -69,7 +77,7 @@ def slug(root: Path, identifier: str) -> str:
 
 
 def gh(*arguments: str) -> str:
-    result = subprocess.run(["gh", *arguments], capture_output=True, text=True, timeout=120)
+    result = subprocess.run([gh_path(), *arguments], capture_output=True, text=True, encoding="utf-8", timeout=120)
     if result.returncode != 0:
         raise ValueError(result.stderr.strip() or f"gh {' '.join(arguments)} failed")
     return result.stdout
