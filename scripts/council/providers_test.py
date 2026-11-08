@@ -186,7 +186,7 @@ def main() -> int:
         shared, before = providers.snapshot(worktree)
         for _ in range(2):
             providers.run(role, "Judge.", worktree, log, shared=shared)
-            assert Path(json.loads(seen.read_text())["cwd"]) == shared, "the call runs in the shared snapshot"
+            assert os.path.realpath(json.loads(seen.read_text())["cwd"]) == os.path.realpath(shared), "the call runs in the shared snapshot"
         assert shared.exists() and providers.fingerprint(shared) == before, "the caller owns the snapshot; no write"
         # A risk run reads the CC with its git-ignored clones: they are copied in at the same place.
         clone = worktree / "build" / "api"
