@@ -460,6 +460,24 @@ class Backup(unittest.TestCase):
         self.assertIn("not backed up: .cc-local/data/", text)
         self.assertIn("not backed up: .cc-local/opensearch: 300 B", text)
 
+    def test_tools_and_venvs_are_left_out(self) -> None:
+        local = self.root / ".cc-local"
+        for folder in ("tools/python/bin", "venvs/windows/Scripts"):
+            (local / folder).mkdir(parents=True)
+        (local / "tools/uv.exe").write_bytes(b"u")
+        (local / "tools/python/bin/python").write_bytes(b"p")
+        (local / "venvs/windows/Scripts/python.exe").write_bytes(b"v")
+        status, text = self.backup()
+        self.assertEqual(status, 0, text)
+        [made] = list((self.home / "b/my-cc").iterdir())
+        with tarfile.open(made / "state.tar.gz") as opened:
+            names = [member.name for member in opened if member.isfile()]
+        self.assertEqual([name for name in names if name.startswith((".cc-local/tools", ".cc-local/venvs"))], [])
+        self.assertIn(".cc-local/threads/api-1.json", names)
+        self.assertIn(".cc-local/prs-seen.json", names)
+        self.assertIn("not backed up: .cc-local/tools/", text)
+        self.assertIn("not backed up: .cc-local/venvs/", text)
+
     def test_keeps_the_newest(self) -> None:
         folder = self.home / "b/my-cc"
         for stamp in ("20200101-000000", "20210101-000000", "20220101-000000"):

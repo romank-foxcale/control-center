@@ -4,7 +4,8 @@
 One backup is <DIR>/<cc name>/<timestamp>/ with
 - cc.bundle: every branch and tag of the CC's history;
 - changes.tar.gz: files Git does not track or that differ from HEAD, without ignored ones (plans live here in the kit);
-- state.tar.gz: .cc-local without data/ and without other folders over 100 MiB, which are listed instead;
+- state.tar.gz: .cc-local without data/, tools/ and venvs/ (rebuildable) and without other folders over 100 MiB,
+  which are listed instead;
 - repos/<clone>.bundle: every branch of each project clone, so worktree commits that are on no remote survive;
 - worktree-changes.tar.gz: each feature worktree's files that differ from its HEAD or are untracked.
 On WSL the folder must be on a Windows drive (/mnt/...): a copy inside the distro's own disk file is lost with it.
@@ -34,6 +35,9 @@ from disk import KIT_STATE, UNDECLARED_BYTES, WALK_SECONDS, Runner, expand, huma
 
 STAMP = re.compile(r"\d{8}-\d{6}")
 BRANCH = "cc-backup"
+# .cc-local folders the kit downloads or builds again on demand: a copy only makes each backup larger.
+REBUILDABLE = {"tools": "downloaded uv and Python, fetched again on demand",
+               "venvs": "Python environments, rebuilt on demand"}
 # GitHub refuses files over 100 MB in a push.
 MAX_FILE_BYTES = 95 * 10**6
 
@@ -87,6 +91,9 @@ def state_members(local: Path) -> tuple[list[Path], list[str]]:
     for path in sorted(local.iterdir()) if local.is_dir() else []:
         if path.name == "data":
             skipped.append("data/: declared rebuildable data")
+            continue
+        if path.name in REBUILDABLE:
+            skipped.append(f"{path.name}/: {REBUILDABLE[path.name]}")
             continue
         size, finished = tree_size(path, time.monotonic() + WALK_SECONDS)
         if path.name not in KIT_STATE and (size >= UNDECLARED_BYTES or not finished):

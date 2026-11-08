@@ -19,8 +19,26 @@ INSTRUCTION_STUBS = {
     Path("CLAUDE.md"): "@AGENTS.md",
 }
 # Claude Code hooks that enforce the hard rules (docs/kit/decisions/0013-rule-hooks.md). This script owns
-# the "hooks" key of the shared settings; every other key, such as permissions, is left alone.
+# the "hooks" key of the shared settings. In permissions it only adds, right after each "Bash(./cc ...)" allow
+# rule, the same rule for the PowerShell tool on Windows ("PowerShell(.\cc.cmd ...)"); every other key and rule is
+# left alone.
 SETTINGS = Path(".claude/settings.json")
+BASH_CC = "Bash(./cc "
+POWERSHELL_CC = "PowerShell(.\\cc.cmd "
+
+
+def powershell_twin(rule: str) -> str | None:
+    return POWERSHELL_CC + rule[len(BASH_CC):] if rule.startswith(BASH_CC) else None
+
+
+def with_twins(allow: list[str]) -> list[str]:
+    result: list[str] = []
+    for rule in allow:
+        result.append(rule)
+        twin = powershell_twin(rule)
+        if twin and twin not in allow and twin not in result:
+            result.append(twin)
+    return result
 
 
 # Shell form through the POSIX shim: sh -c on Linux and macOS, Git Bash on Windows, where Claude Code sets
@@ -74,8 +92,14 @@ def drift(root: Path) -> list[str]:
         if not path.is_file() or marker not in path.read_text(encoding="utf-8"):
             problems.append(f"{stub}: must exist and contain '{marker}'")
     try:
-        if json.loads((root / SETTINGS).read_text(encoding="utf-8")).get("hooks") != HOOKS:
+        settings = json.loads((root / SETTINGS).read_text(encoding="utf-8"))
+        if settings.get("hooks") != HOOKS:
             problems.append(f"{SETTINGS}: hooks differ from scripts/agent-configs.py")
+        allow = settings.get("permissions", {}).get("allow", [])
+        for rule in allow:
+            twin = powershell_twin(rule)
+            if twin and twin not in allow:
+                problems.append(f"{SETTINGS}: permissions.allow has {rule} but not {twin}")
     except (OSError, ValueError) as error:
         problems.append(f"{SETTINGS}: {error}")
     return problems
@@ -94,6 +118,9 @@ def sync(root: Path) -> None:
     path = root / SETTINGS
     settings = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     settings["hooks"] = HOOKS
+    permissions = settings.get("permissions")
+    if isinstance(permissions, dict) and isinstance(permissions.get("allow"), list):
+        permissions["allow"] = with_twins(permissions["allow"])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(f"synced rule hooks -> {SETTINGS}")

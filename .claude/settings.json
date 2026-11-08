@@ -3,16 +3,27 @@
   "permissions": {
     "allow": [
       "Bash(./cc help)",
+      "PowerShell(.\\cc.cmd help)",
       "Bash(./cc show:*)",
+      "PowerShell(.\\cc.cmd show:*)",
       "Bash(./cc validate)",
+      "PowerShell(.\\cc.cmd validate)",
       "Bash(./cc doctor)",
+      "PowerShell(.\\cc.cmd doctor)",
       "Bash(./cc agents check)",
+      "PowerShell(.\\cc.cmd agents check)",
       "Bash(./cc repo list)",
+      "PowerShell(.\\cc.cmd repo list)",
       "Bash(./cc repo show:*)",
+      "PowerShell(.\\cc.cmd repo show:*)",
       "Bash(./cc plan list)",
+      "PowerShell(.\\cc.cmd plan list)",
       "Bash(./cc plan show:*)",
+      "PowerShell(.\\cc.cmd plan show:*)",
       "Bash(./cc worktree status:*)",
-      "Bash(./cc bootstrap validate)"
+      "PowerShell(.\\cc.cmd worktree status:*)",
+      "Bash(./cc bootstrap validate)",
+      "PowerShell(.\\cc.cmd bootstrap validate)"
     ]
   },
   "hooks": {
