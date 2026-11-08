@@ -5,11 +5,16 @@ The registry holds the same check groups and scripts as the checks.* outputs of 
 itself; checks_test.py fails when the two drift apart. Every group runs its scripts in order with this interpreter,
 in a fresh temporary HOME, the groups in parallel. When Nix is installed, `nix flake check` runs as an optional last
 row ("nix extra"); it also covers the Nix-only checks (contract-check, gate-venv) and the adapters' own checks.
+
+With CC_CHECK_SUMMARY set to a file path, the run also writes there, as JSON, each step's status and the number of
+tests it ran and skipped (from unittest's summary lines). CI compares these files across OSes (scripts/ci_compare.py).
 """
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -46,6 +51,7 @@ class Result:
     status: str  # "pass", "FAIL" or a "not run ..." note
     seconds: float
     output: str = field(default="", repr=False)
+    steps: list[dict] = field(default_factory=list)  # {"script", "status", "ran", "skipped"} per step that ran
 
     @property
     def failed(self) -> bool:
@@ -79,9 +85,17 @@ def registry(root: Path = ROOT) -> list[Group]:
     return groups
 
 
+def test_counts(output: str) -> tuple[int | None, int]:
+    """Tests run and skipped, from unittest's last "Ran N tests" and "skipped=K"; None run for a plain script."""
+    ran = re.findall(r"^Ran (\d+) tests? in ", output, re.MULTILINE)
+    skipped = re.findall(r"^(?:OK|FAILED) \(.*?skipped=(\d+)", output, re.MULTILINE)
+    return (int(ran[-1]) if ran else None), (int(skipped[-1]) if skipped else 0)
+
+
 def run_group(group: Group, root: Path = ROOT) -> Result:
     started = time.monotonic()
     output: list[str] = []
+    steps: list[dict] = []
     status = "pass"
     with tempfile.TemporaryDirectory(prefix=f"cc-check-{group.name}-") as home:
         # A fresh HOME, as the Nix sandbox gives: no user git config, credentials or CC state leak into a test.
@@ -100,14 +114,24 @@ def run_group(group: Group, root: Path = ROOT) -> Result:
                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             except OSError as error:
                 output.append(f"$ {script}: {error}\n")
+                steps.append({"script": script, "status": "FAIL", "ran": None, "skipped": 0})
                 status = "FAIL"
                 break
             output.append(f"$ {script} {' '.join(arguments)}\n{completed.stdout}")
+            ran, skipped = test_counts(completed.stdout)
+            steps.append({"script": script, "status": "FAIL" if completed.returncode else "pass", "ran": ran,
+                          "skipped": skipped})
             if completed.returncode != 0:
                 output.append(f"{script} exited with {completed.returncode}\n")
                 status = "FAIL"
                 break
-    return Result(group.name, status, time.monotonic() - started, "".join(output))
+    return Result(group.name, status, time.monotonic() - started, "".join(output), steps)
+
+
+def write_summary(path: Path, results: list[Result]) -> None:
+    summary = {"platform": sys.platform,
+               "groups": {result.name: {"status": result.status, "steps": result.steps} for result in results}}
+    path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
 
 def nix_extra(arguments: list[str], root: Path = ROOT) -> Result:
@@ -155,7 +179,9 @@ def main(arguments: list[str], root: Path = ROOT) -> int:
     """./cc check: every native group, then the nix extra with the arguments the native runner does not take."""
     if arguments and resolve_exe("nix") is None:
         print(f"note: arguments for nix flake check ignored, Nix is absent: {' '.join(arguments)}", file=sys.stderr)
-    status, _ = run(registry(root), root, lambda: nix_extra(arguments, root))
+    status, results = run(registry(root), root, lambda: nix_extra(arguments, root))
+    if summary := os.environ.get("CC_CHECK_SUMMARY"):
+        write_summary(Path(summary), results)
     return status
 
 

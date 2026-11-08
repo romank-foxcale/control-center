@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Test scripts/checks.py: the registry matches the checks of flake.nix, a failing script fails its row and the exit
-code, a passing one passes, the nix extra is a note without Nix, and every group runs in a fresh temporary HOME."""
+code, a passing one passes, the nix extra is a note without Nix, every group runs in a fresh temporary HOME, and the
+summary CI compares across OSes counts each step's tests (scripts/ci_compare.py, tested here too)."""
 
 from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import re
 import sys
@@ -16,6 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import checks  # noqa: E402
+import ci_compare  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 NIX_ONLY = {"contract-check", "gate-venv"}
@@ -69,6 +72,39 @@ class Registry(unittest.TestCase):
             (Path(template) / "control-center.json").write_text("{}", encoding="utf-8")
             bootstrap = [group for group in checks.registry(Path(template)) if group.name == "bootstrap"]
         self.assertEqual(bootstrap[0].steps, [("scripts/validate-control-center.py", checks.ROOT_ARGUMENT)])
+
+
+def summary(platform: str, steps: list[tuple[str, int | None, int]], status: str = "pass") -> dict:
+    return {"platform": platform, "groups": {"g": {"status": status, "steps": [
+        {"script": script, "status": status, "ran": ran, "skipped": skipped} for script, ran, skipped in steps]}}}
+
+
+class Compare(unittest.TestCase):
+    STEPS = [("scripts/a_test.py", 4, 0), ("scripts/plain.py", None, 0), ("scripts/store_gc_test.py", 5, 0)]
+    WINDOWS = [("scripts/a_test.py", 4, 0), ("scripts/plain.py", None, 0), ("scripts/store_gc_test.py", 5, 5)]
+
+    def test_the_same_tests_everywhere_pass(self) -> None:
+        self.assertEqual(ci_compare.differences(
+            [summary("linux", self.STEPS), summary("darwin", self.STEPS), summary("win32", self.WINDOWS)]), [])
+
+    def test_a_windows_skip_on_purpose_fails(self) -> None:
+        windows = [("scripts/a_test.py", 4, 1), *self.WINDOWS[1:]]
+        found = ci_compare.differences([summary("linux", self.STEPS), summary("win32", windows)])
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("scripts/a_test.py", found[0])
+        self.assertIn("win32 skipped 1", found[0])
+
+    def test_a_missing_skip_that_is_expected_fails_too(self) -> None:
+        found = ci_compare.differences([summary("linux", self.STEPS), summary("win32", self.STEPS)])
+        self.assertTrue(any("store_gc_test.py" in line for line in found), found)
+
+    def test_a_different_count_a_missing_step_and_a_failed_step_fail(self) -> None:
+        fewer = [("scripts/a_test.py", 3, 0), ("scripts/plain.py", None, 0)]
+        found = ci_compare.differences([summary("linux", self.STEPS), summary("darwin", fewer)])
+        self.assertTrue(any("a_test.py" in line and "ran" in line for line in found), found)
+        self.assertTrue(any("store_gc_test.py" in line and "not run on darwin" in line for line in found), found)
+        found = ci_compare.differences([summary("linux", self.STEPS), summary("darwin", self.STEPS, "FAIL")])
+        self.assertTrue(found, "a failed step fails the comparison")
 
 
 class Runner(unittest.TestCase):
@@ -131,6 +167,20 @@ class Runner(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual((results[-1].name, results[-1].status), ("nix extra", "not run (optional, no Nix)"))
         self.assertEqual(out.splitlines()[-1].split("  ")[0].strip(), "nix extra")
+
+    def test_the_summary_counts_each_steps_tests(self) -> None:
+        self.write("unit.py", "import unittest\nclass T(unittest.TestCase):\n"
+                              "    def test_a(self): pass\n    def test_b(self): pass\n"
+                              "    @unittest.skip('no')\n    def test_c(self): pass\nunittest.main()\n")
+        groups = [checks.Group("g", [("scripts/ok.py",), ("scripts/unit.py",)])]
+        _, results, _ = quiet_run(groups, self.root)
+        summary = self.root / "summary.json"
+        checks.write_summary(summary, results)
+        data = json.loads(summary.read_text(encoding="utf-8"))
+        self.assertEqual(data["platform"], sys.platform)
+        self.assertEqual(data["groups"]["g"]["steps"], [
+            {"script": "scripts/ok.py", "status": "pass", "ran": None, "skipped": 0},
+            {"script": "scripts/unit.py", "status": "pass", "ran": 3, "skipped": 1}])
 
     def test_a_failing_extra_fails_the_exit(self) -> None:
         status, _, out = quiet_run([checks.Group("good", [("scripts/ok.py",)])], self.root,
