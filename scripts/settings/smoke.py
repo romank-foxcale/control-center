@@ -157,6 +157,10 @@ async def check(root: Path) -> None:
         await pilot.pause()
         assert sent == [("repo", "remove", "app")], sent
 
+        # Shutdown removes the panel's widgets while the 1 s refresh timer can still fire; that refresh must do nothing.
+        await app.query_one("#top").remove()
+        app.action_refresh()
+
     text = show(snapshot(root))
     for expected in ("x_CC · ready", "1 waiting for you", "AGENTS", "judge", "COUNCILS", "approval on", "REPOS", "csharp", "develop", "reference", "TRELLO", "not connected"):
         assert expected in text, f"show must contain {expected!r}:\n{text}"

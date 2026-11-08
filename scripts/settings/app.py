@@ -15,6 +15,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Input, Label, OptionList, Static, TabbedContent, TabPane
 from textual.widgets.option_list import Option
@@ -246,7 +247,11 @@ class Settings(App):
     def action_refresh(self) -> None:
         self.state = snapshot(self.root)
         self.line = int(time.time() // 20)
-        self.render_state()
+        try:
+            self.render_state()
+        except NoMatches:
+            # The 1 s timer can fire while the app shuts down, after the panel's widgets are removed (CI, 2026-11-08).
+            pass
 
     def render_state(self) -> None:
         state = self.state

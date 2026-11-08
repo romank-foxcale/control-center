@@ -16,7 +16,16 @@ try {
     $zip = Join-Path $temp $asset
     Write-Host "cc: downloading uv $version ($asset)"
     $ProgressPreference = 'SilentlyContinue'
-    Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/download/$version/$asset" -OutFile $zip
+    # A short network fault (GitHub answered 504 in CI, 2026-11-08) must not stop a first run: try 5 times.
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/astral-sh/uv/releases/download/$version/$asset" -OutFile $zip
+            break
+        } catch {
+            if ($attempt -ge 5) { throw }
+            Start-Sleep -Seconds 3
+        }
+    }
     $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
     if ($actual -ne $expected) { throw "SHA-256 mismatch for ${asset}: expected $expected, got $actual" }
     Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $temp 'x')

@@ -106,22 +106,44 @@ def stop_tree(process: subprocess.Popen) -> None:
 
 
 def long_path(path: str | os.PathLike[str]) -> Path:
-    """The canonical absolute spelling of a path: symlinks resolved and, on Windows, 8.3 short names expanded.
+    """The canonical absolute spelling of a path: symlinks resolved and, where the file system ignores letter case
+    (Windows, macOS by default), the case stored on disk; on Windows also 8.3 short names expanded.
 
     Works for paths that do not exist yet: the longest existing prefix is expanded, the rest kept as given.
     """
     resolved = Path(os.path.realpath(path))
-    if not WINDOWS:
+    if not WINDOWS and sys.platform != "darwin":
         return resolved
     head, tail = resolved, []
     while not head.exists() and head.parent != head:
         head, tail = head.parent, [head.name, *tail]
-    size = _kernel32.GetLongPathNameW(str(head), None, 0)
-    if size:
-        buffer = ctypes.create_unicode_buffer(size)
-        if _kernel32.GetLongPathNameW(str(head), buffer, size):
-            head = Path(buffer.value)
-    return head.joinpath(*tail)
+    return _on_disk(head).joinpath(*tail)
+
+
+def _on_disk(head: Path) -> Path:
+    """The spelling the file system stores for an existing path; the path as given when it cannot be read."""
+    if WINDOWS:
+        size = _kernel32.GetLongPathNameW(str(head), None, 0)
+        if size:
+            buffer = ctypes.create_unicode_buffer(size)
+            if _kernel32.GetLongPathNameW(str(head), buffer, size):
+                return Path(buffer.value)
+        return head
+    # macOS: realpath keeps the letter case as typed, so /Users/me/CC and /users/me/cc stay two spellings of one
+    # folder. F_GETPATH returns the path the kernel holds for an open file, in the case stored on disk.
+    import fcntl
+
+    try:
+        descriptor = os.open(head, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return head
+    try:
+        found = fcntl.fcntl(descriptor, fcntl.F_GETPATH, bytes(1024))
+    except OSError:
+        return head
+    finally:
+        os.close(descriptor)
+    return Path(os.fsdecode(found.split(b"\0", 1)[0]))
 
 
 _DRIVE_ROOT = re.compile(r"^/(?:mnt/|cygdrive/)?([A-Za-z])(?:/(.*))?$")

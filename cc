@@ -28,7 +28,8 @@ fetch_uv() {
   trap 'rm -rf "$temp"' EXIT
   url="https://github.com/astral-sh/uv/releases/download/$version/$asset"
   echo "cc: downloading uv $version ($asset)" >&2
-  if command -v curl >/dev/null 2>&1; then curl -fsSL -o "$temp/$asset" "$url"; else wget -q -O "$temp/$asset" "$url"; fi
+  if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 5 --retry-delay 3 --retry-connrefused -o "$temp/$asset" "$url"
+  else wget -q --tries=5 --waitretry=3 --retry-connrefused -O "$temp/$asset" "$url"; fi
   if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$temp/$asset" | cut -d' ' -f1)
   else actual=$(shasum -a 256 "$temp/$asset" | cut -d' ' -f1); fi
   if [ "$actual" != "$expected" ]; then

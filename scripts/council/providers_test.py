@@ -161,7 +161,9 @@ def main() -> int:
         call = json.loads(seen.read_text())
         assert reply == "DECISION: A\n\n## Reasoning\nA reuses the parser.", f"the closing messages, no preamble: {reply!r}"
         assert call["prompt"] == "# Task\n\nJudge.", "the prompt goes on stdin, not argv"
-        assert Path(call["cwd"]) != worktree and Path(call["argv"][call["argv"].index("--workspace") + 1]) == Path(call["cwd"])
+        # Compared resolved: the fake agent reports os.getcwd(), which on macOS is /private/var/... for /var/...
+        workspace = os.path.realpath(call["argv"][call["argv"].index("--workspace") + 1])
+        assert os.path.realpath(call["cwd"]) != os.path.realpath(worktree) and workspace == os.path.realpath(call["cwd"])
         assert json.loads(call["config"]) == providers.CURSOR_DENY, "the project's own config is replaced by the deny config"
         assert call["files"] == [".cursor/cli.json", ".gitignore", "app.py", "new.py"], call["files"]
         assert not Path(call["cwd"]).exists(), "the snapshot is deleted"

@@ -130,6 +130,17 @@ class LongPath(unittest.TestCase):
                              hostos.long_path(real) / "not-yet" / "file.txt")
             self.assertNotIn("~", str(hostos.long_path(alias)))
 
+    def test_another_letter_case_has_the_stored_spelling(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            real = hostos.long_path(temporary) / "Mixed Case Folder"
+            real.mkdir()
+            swapped = Path(str(real).swapcase())
+            if not swapped.exists():  # Linux: another letter case is another path, kept as typed
+                self.assertEqual(str(hostos.long_path(swapped)), str(swapped))
+                return
+            self.assertEqual(str(hostos.long_path(swapped)), str(real))
+            self.assertEqual(str(hostos.long_path(swapped / "new.txt")), str(real / "new.txt"))
+
     def test_the_temp_folder_has_no_short_names(self) -> None:
         self.assertNotIn("~", str(hostos.long_path(tempfile.gettempdir())))
 
