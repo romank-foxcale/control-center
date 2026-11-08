@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Test the optional disk keys of control-center.json: localData, localCaches and backup. A manifest without them
-passes, so older CCs keep passing ./cc check; each wrong shape gives exactly the error that names it."""
+passes, so older CCs keep passing ./cc check; each wrong shape gives exactly the error that names it. Also test that
+a materialized CC records the cc shim as executable in Git and that the validator rejects a shim recorded as 100644."""
 
 from __future__ import annotations
 
 import importlib.util
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -109,6 +113,61 @@ class DiskKeys(unittest.TestCase):
         self.assertEqual(errors(backup={"path": "~/b", "push": True}), [])
         self.assertEqual(errors(backup={"path": "~/b", "push": "yes"}), ["control-center.json: backup.push must be true or false"])
         self.assertEqual(len(errors(backup="~/b")), 1)
+
+
+KIT = Path(__file__).resolve().parents[1]
+materialize_spec = importlib.util.spec_from_file_location("materialize_template", KIT / "scripts" / "materialize-template.py")
+materializer = importlib.util.module_from_spec(materialize_spec)
+materialize_spec.loader.exec_module(materializer)
+
+
+def git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.name=Test", "-c", "user.email=test@example.com", *args],
+                          check=True, capture_output=True, text=True).stdout
+
+
+@unittest.skipUnless(shutil.which("git"), "git is not installed")
+class ShimMode(unittest.TestCase):
+    """A CC made on Windows (core.filemode=false) must still record cc as 100755, or ./cc and every hook fail in a
+    macOS or Linux clone."""
+
+    def setUp(self) -> None:
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.directory, ignore_errors=True)
+
+    @unittest.skipUnless((KIT / ".git").exists(), "the kit is not a git clone (Nix store copy)")
+    def test_materialized_cc_commits_the_shim_as_executable(self) -> None:
+        target = self.directory / "new-cc"
+        target.mkdir()
+        materializer.materialize(KIT, target)
+        git(target, "config", "core.filemode", "false")
+        git(target, "add", "-A")
+        git(target, "commit", "-q", "-m", "first")
+        self.assertTrue(git(target, "ls-tree", "HEAD", "--", "cc").startswith("100755"))
+        self.assertEqual(shim_errors(target), [])
+
+    def test_validator_rejects_a_shim_without_the_executable_bit(self) -> None:
+        repo = self.directory / "cc-repo"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "core.filemode", "false")
+        self.assertEqual(shim_errors(repo), [])  # no cc yet
+        (repo / "cc").write_text("#!/bin/sh\n", encoding="utf-8")
+        self.assertEqual(shim_errors(repo), [])  # untracked
+        git(repo, "add", "--chmod=-x", "--", "cc")
+        git(repo, "commit", "-q", "-m", "shim")
+        self.assertEqual(shim_errors(repo), ["cc: Git records the shim without the executable bit, so ./cc fails on "
+                                             "macOS and Linux; run git update-index --chmod=+x cc and commit"])
+        git(repo, "update-index", "--chmod=+x", "--", "cc")
+        self.assertEqual(shim_errors(repo), [])  # staged fix, before the commit
+        git(repo, "commit", "-q", "-m", "fix")
+        self.assertEqual(shim_errors(repo), [])
+
+
+def shim_errors(root: Path) -> list[str]:
+    found: list[str] = []
+    validator.validate_shim_mode(root, found)
+    return found
 
 
 if __name__ == "__main__":

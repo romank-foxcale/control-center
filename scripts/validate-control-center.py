@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -430,6 +432,17 @@ def validate_plans(root: Path, errors: list[str]) -> None:
                 errors.append(f"{relative}: completed plan must have Planning status 'accepted'")
 
 
+def validate_shim_mode(root: Path, errors: list[str]) -> None:
+    """The cc shim must be recorded as executable (100755) once Git tracks or stages it, or a macOS or Linux clone
+    cannot run ./cc or its hooks. Outside a git repo (a Nix store copy), without git, or with cc untracked: no check."""
+    if not (root / ".git").exists() or shutil.which("git") is None:
+        return
+    result = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "--", "cc"], capture_output=True, text=True)
+    if result.returncode == 0 and result.stdout.strip() and not result.stdout.startswith("100755"):
+        errors.append("cc: Git records the shim without the executable bit, so ./cc fails on macOS and Linux; "
+                      "run git update-index --chmod=+x cc and commit")
+
+
 def validate(root: Path, adapter_targets: dict[str, Any] | None = None) -> list[str]:
     root = root.resolve()
     errors: list[str] = []
@@ -478,6 +491,7 @@ def validate(root: Path, adapter_targets: dict[str, Any] | None = None) -> list[
     validate_councils(root, validate_agents(root, errors), errors)
     validate_trello(root, errors)
     validate_plans(root, errors)
+    validate_shim_mode(root, errors)
 
     if status == "ready":
         if not repositories:
