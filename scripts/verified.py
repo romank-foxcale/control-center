@@ -50,16 +50,22 @@ def commit_tree(repository: Path, revision: str = "HEAD") -> str:
     return git(repository, "rev-parse", f"{revision}^{{tree}}")
 
 
-def record(root: Path, repository: Path, kind: str, tree: str | None = None) -> str:
-    """Stamp `tree` (by default the tree `repository` has on disk now) as passed by `kind`; returns the tree."""
+def record(root: Path, repository: Path, kind: str, tree: str | None = None, nix: bool | None = None) -> str:
+    """Stamp `tree` (by default the tree `repository` has on disk now) as passed by `kind`; returns the tree.
+
+    `nix` says whether the run included the Nix part (nix flake check): stored as "nix" when given. A stamp without the
+    key (older stamps, or no value given) means unknown. Once a run on this tree ran the Nix part, it stays true."""
     tree = tree or working_tree(repository)
     directory = stamps(root)
     directory.mkdir(parents=True, exist_ok=True)
     stamp = directory / tree
-    found = lookup(root, tree)
-    kinds = sorted({kind, *(found or {}).get("kinds", [])})
-    stamp.write_text(json.dumps({"kinds": kinds, "repository": str(repository),
-                                 "at": time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n", encoding="utf-8")
+    found = lookup(root, tree) or {}
+    data = {"kinds": sorted({kind, *found.get("kinds", [])}), "repository": str(repository),
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    known = [value for value in (found.get("nix"), nix) if isinstance(value, bool)]
+    if known:
+        data["nix"] = any(known)
+    stamp.write_text(json.dumps(data) + "\n", encoding="utf-8")
     return tree
 
 
@@ -70,13 +76,17 @@ def lookup(root: Path, tree: str) -> dict | None:
         return None
 
 
+NIX_FLAGS = {"--nix": True, "--no-nix": False}
+
+
 def main() -> int:
-    if len(sys.argv) != 5 or sys.argv[2] != "record" or sys.argv[4] not in KINDS:
-        print(f"usage: verified.py <cc-root> record <repository> <{'|'.join(KINDS)}>", file=sys.stderr)
+    if len(sys.argv) not in (5, 6) or sys.argv[2] != "record" or sys.argv[4] not in KINDS \
+            or sys.argv[5:] and sys.argv[5] not in NIX_FLAGS:
+        print(f"usage: verified.py <cc-root> record <repository> <{'|'.join(KINDS)}> [--nix|--no-nix]", file=sys.stderr)
         return 2
     root, repository = Path(sys.argv[1]).resolve(), Path(sys.argv[3]).resolve()
     try:
-        record(root, repository, sys.argv[4])
+        record(root, repository, sys.argv[4], nix=NIX_FLAGS.get(sys.argv[5]) if sys.argv[5:] else None)
     except (OSError, subprocess.CalledProcessError) as error:
         print(f"warning: no {sys.argv[4]} stamp for {repository}: {error}", file=sys.stderr)
     return 0

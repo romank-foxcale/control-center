@@ -166,6 +166,8 @@ def path_key(raw: str) -> str:
     share = re.match(r"^\\\\wsl(?:\.localhost|\$)\\[^\\]+\\(.*)$", raw)
     if share:
         raw = "/" + share.group(1).replace("\\", "/")
+    elif raw.startswith("\\\\"):  # another network share (\\server\share\x), case-insensitive like a drive
+        return posixpath.normpath(raw.replace("\\", "/")).lower()
     return posixpath.normpath(raw)
 
 
@@ -420,13 +422,43 @@ def unverified_push(command: str, cwd: Path, root: Path = ROOT) -> str | None:
     if top != cc and cc not in top.parents:
         return None  # another project; the isolation hook covers it
     needed = ("check", "verify") if top == cc else ("verify",)
-    kinds = (verified.lookup(root, tree) or {}).get("kinds", [])
-    if any(kind in kinds for kind in needed):
-        return None
-    run = "./cc check or ./cc verify" if top == cc else "./cc feature <feature> verify"
-    return (f"No passing {run} is recorded for the tree of HEAD ({head}) in {top}. AGENTS.md 'Done means verified': "
-            f"run it on this exact tree before pushing, and run the changed thing itself if no gate does. If it cannot "
-            f"run here, tell the user what was and was not verified and let them decide.")
+    stamp = verified.lookup(root, tree) or {}
+    no_nix = " This host has no Nix, so the Nix-defined project gates cannot run here (decision 0033)." \
+        if hostos.resolve_exe("nix") is None else ""
+    if not any(kind in stamp.get("kinds", []) for kind in needed):
+        run = "./cc check or ./cc verify" if top == cc else "./cc feature <feature> verify"
+        return (f"No passing {run} is recorded for the tree of HEAD ({head}) in {top}. AGENTS.md 'Done means verified': "
+                f"run it on this exact tree before pushing, and run the changed thing itself if no gate does. If it cannot "
+                f"run here, tell the user what was and was not verified and let them decide."
+                + (no_nix if top != cc else ""))
+    changed = nix_changes(repository)
+    if changed and stamp.get("nix") is not True:
+        shown = ", ".join(changed[:5]) + (", ..." if len(changed) > 5 else "")
+        return (f"The pushed commits change Nix inputs ({shown}), but the passing run recorded for the tree of HEAD "
+                f"({head}) in {top} did not include the Nix part: nix flake check did not run for these changes. Run "
+                f"./cc check or ./cc verify with Nix on this exact tree, or tell the user that the Nix part was not "
+                f"verified and let them decide.{no_nix}")
+    return None
+
+
+def nix_input(name: str) -> bool:
+    """A path (relative to the repository) that the Nix part evaluates: a *.nix file, a flake.lock, the catalog."""
+    return name.endswith(".nix") or posixpath.basename(name) == "flake.lock" or name.startswith("catalog/")
+
+
+def nix_changes(repository: Path) -> list[str]:
+    """The Nix inputs that a push of HEAD sends: changed since the merge base with the upstream branch, else with
+    origin/HEAD or origin/main; with none of them, every file of HEAD is new to the remote."""
+    for upstream in ("@{upstream}", "origin/HEAD", "origin/main"):
+        try:
+            base = verified.git(repository, "merge-base", "HEAD", upstream)
+        except subprocess.CalledProcessError:
+            continue
+        names = verified.git(repository, "-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", base, "HEAD")
+        break
+    else:
+        names = verified.git(repository, "-c", "core.quotePath=false", "ls-tree", "-r", "--name-only", "HEAD")
+    return [name for name in names.splitlines() if nix_input(name)]
 
 
 # Isolation between projects (docs/kit/decisions/0016-per-cc-repos-and-worktrees.md): a CC keeps its repos and
@@ -533,6 +565,11 @@ def tag_removal(event: dict[str, Any], root: Path) -> bool:
                for change in edits if isinstance(change, dict))
 
 
+# Files every hook runs through before rule_hooks.py loads (the shims, the pinned Python, the guard): hook_guard.py
+# cannot keep a repair open when one of them is broken (docs/kit/decisions/0013-rule-hooks.md).
+CORE_FILES = ("pyproject.toml", "uv.lock", ".uv-pin", "cc", "cc.cmd", "cc.ps1", "scripts/hook_guard.py")
+
+
 def pre_edit(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
     raw = event.get("tool_input", {}).get("file_path") or event.get("tool_input", {}).get("notebook_path")
     if raw:
@@ -552,6 +589,10 @@ def pre_edit(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
     if relative is None:
         return None
     parts = relative_parts(relative)
+    if parts in {relative_parts(Path(name)) for name in CORE_FILES}:
+        return pre_tool("ask", f"{relative.as_posix()} is a CC core file: every hook runs through it. A broken one makes "
+                               "every hook fail, which blocks every tool call, and only the user can repair it with git "
+                               "checkout in a terminal. Allow only if the user asked for this change.")
     if parts[:2] == (".claude", "skills"):
         source = Path(".agents", *relative.parts[1:]).as_posix()
         return pre_tool("deny", f".claude/skills is a generated copy: edit {source} instead, then run ./cc agents sync.")
@@ -596,6 +637,11 @@ def reference_repos(root: Path, event: dict[str, Any]) -> list[str]:
 
 def post_read(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
     """After the first read of a reference repo in a session, remind the agent what it is: guidance, not truth."""
+    try:
+        if not any((root / "repos" / "reference").iterdir()):
+            return None  # this CC has no reference repo, so no read can touch one
+    except OSError:
+        return None
     repos = reference_repos(root, event)
     if not repos:
         return None
@@ -648,15 +694,39 @@ SETUP_CONTEXT = {
 }
 
 
+# The first Claude Code release whose hooks honour "onFailure": "block"; an older one lets a failing hook's call through.
+FAIL_CLOSED_CLAUDE = (2, 1, 295)
+
+
+def claude_version() -> tuple[int, ...] | None:
+    """The version `claude --version` reports (2.1.318 from "2.1.318 (Claude Code)"); None when it cannot be read."""
+    executable = hostos.resolve_exe("claude")
+    if not executable:
+        return None
+    try:
+        output = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    found = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", output or "")
+    return tuple(int(part) for part in found.groups()) if found else None
+
+
 def session_start(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
-    """Make the agent start (or resume) the setup of a CC that is not ready, so nobody needs a magic first prompt."""
+    """Make the agent start (or resume) the setup of a CC that is not ready, so nobody needs a magic first prompt, and
+    warn when this Claude Code is too old to block a call whose rule hook fails."""
+    result: dict[str, Any] = {}
+    version = claude_version()
+    if version and version < FAIL_CLOSED_CLAUDE:
+        result["systemMessage"] = (f"This Claude Code is {'.'.join(map(str, version))}. The CC's fail-closed hooks need "
+                                   "Claude Code 2.1.295 or later; with this version the rules may not apply. Update "
+                                   "Claude Code.")
     try:
         status = json.loads((root / "control-center.json").read_text(encoding="utf-8")).get("status")
-    except (OSError, ValueError):
-        return None  # the template itself, or a broken file that ./cc check reports
-    if status not in SETUP_CONTEXT:
-        return None
-    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": SETUP_CONTEXT[status]}}
+    except (OSError, ValueError, AttributeError):
+        status = None  # the template itself, or a broken file that ./cc check reports
+    if status in SETUP_CONTEXT:
+        result["hookSpecificOutput"] = {"hookEventName": "SessionStart", "additionalContext": SETUP_CONTEXT[status]}
+    return result or None
 
 
 HANDLERS = {"pre-bash": pre_bash, "pre-read": pre_read, "post-read": post_read, "pre-edit": pre_edit, "post-edit": post_edit,
@@ -676,7 +746,11 @@ def main() -> int:
     name = sys.argv[1]
     try:
         event = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
-        result = HANDLERS[name](event)
+        if name in GATES and not (isinstance(event, dict) and isinstance(event.get("tool_input"), dict)):
+            # Without a tool call every gate would find nothing to refuse and allow (an empty stdin gave {}).
+            result = pre_tool("deny", "the hook got no tool call to check, so the call is blocked")
+        else:
+            result = HANDLERS[name](event)
     except Exception as error:
         if name in GATES:
             print(f"rule hook {name} failed, so the call is blocked: {error}. Fix scripts/rule_hooks.py or run "
