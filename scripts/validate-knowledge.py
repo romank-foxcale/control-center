@@ -169,6 +169,35 @@ def stale_evidence(root: Path) -> list[str]:
             for note, path, verified_at in claims if dates.get(path, "") > verified_at]
 
 
+# Claims that the CC as a whole needs Nix or WSL. Since 0033 the core runs natively and Nix is an optional extra, so such
+# a line misleads every agent that reads it. Superseded notes keep their history.
+OUTDATED_REQUIREMENTS = re.compile(
+    r"\b(?:Nix|WSL) is (?:required|mandatory)\b"
+    r"|\bNix (?:is|becomes) a mandatory prerequisite\b"
+    r"|\b[Rr]equires (?:Nix|WSL)\b"
+    r"|(?:\./cc|\bthe CC|\bcc check|\bcc verify|\bcc\.cmd)`? (?:requires|needs) (?:Nix|WSL)\b"
+    r"|\bforwards to WSL\b"
+    r"|\bruns `?\./cc`? inside WSL\b"
+)
+
+
+def outdated_requirements(root: Path) -> list[str]:
+    """Lines in committed Markdown that still say the CC needs Nix or WSL (docs/kit/decisions/0033-native-core-nix-optional.md)."""
+    errors = []
+    for name in repository_files(root):
+        # Plans are working notes that record the old state on purpose.
+        if not name.lower().endswith(".md") or name.startswith("plans/") or not (root / name).is_file():
+            continue
+        text = (root / name).read_text(encoding="utf-8", errors="replace")
+        if re.search(r"(?m)^status: superseded$", text[:2000]):
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            if match := OUTDATED_REQUIREMENTS.search(line):
+                errors.append(f"{name}:{number}: says the CC needs Nix or WSL (\"{match.group(0)}\"); since decision 0033 "
+                              "the core runs natively and Nix is an optional extra")
+    return errors
+
+
 def validate(root: Path) -> list[str]:
     errors: list[str] = []
     root = root.resolve()
@@ -233,6 +262,7 @@ def validate(root: Path) -> list[str]:
         errors.append("docs/: no Markdown notes found")
     errors.extend(stray_markdown(root))
     errors.extend(project_layer_in_template(root))
+    errors.extend(outdated_requirements(root))
     return errors
 
 

@@ -2,7 +2,7 @@
 id: kit.rules.executable-processes
 title: Executable processes
 status: active
-summary: All knowledge about building, testing, packaging and running is expressed as Nix outputs.
+summary: Project builds, tests, packages and runs are Nix outputs; the CC's own checks run natively through ./cc on every OS, and a command x host table shows what needs the optional Nix extra.
 verified_at: 2026-11-08
 evidence:
   - flake.nix
@@ -16,6 +16,7 @@ relations:
   - docs/kit/architecture/control-center.md
   - docs/kit/rules/project-adapters.md
   - docs/kit/decisions/0001-nix-executable-knowledge.md
+  - docs/kit/decisions/0033-native-core-nix-optional.md
 ---
 
 # Executable processes

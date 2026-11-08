@@ -28,6 +28,8 @@ You don't need to know how it works inside. You talk to the agent; it does the r
   curl -fsSL https://raw.githubusercontent.com/romank-foxcale/command-center/main/install/install.sh | bash
   ```
 
+The installers also set up Nix (on Windows inside WSL): the optional extra that builds and checks your project repos today. The CC itself runs without it; see "Without `cc-kit`" below.
+
 **2. Name your first Control Center.** The installer asks for a name at the end. Use the product or system it covers, for example `shop`.
 
 **3. Answer the agent's questions.** Claude opens and interviews you: which repos, how they relate, which platforms they ship on. It reads the code first, so it only asks what it can't find out. It then connects each repo and proves it builds and passes its tests.
@@ -72,7 +74,7 @@ A CC stores two kinds of knowledge:
 - **how to carry out a process**: Nix `packages`, `checks`, `apps` and, where needed, NixOS modules. Build, test and deploy steps are never written down as Markdown: when a process changes, an executable declaration must break.
 - **why the system is built this way**: atomic linked Markdown notes in `docs/`. `docs/kit/` is the kit's own layer and is never edited in a CC.
 
-Everything runs through `./cc` in the CC folder (from PowerShell: `.\cc`, which forwards to WSL):
+Everything runs through `./cc` in the CC folder, natively on Windows, macOS and Linux (from PowerShell: `.\cc.cmd`). The first run downloads the pinned uv and Python into `.cc-local/`; nothing else needs to be installed first:
 
 ```bash
 ./cc check                                    # every pure check: builds, tests, notes, skill sync
@@ -87,7 +89,7 @@ Everything runs through `./cc` in the CC folder (from PowerShell: `.\cc`, which 
                                               # measure an AGENTS.md or skill change: pass rate, tokens, cost, time
 ```
 
-Requires Nix with flakes. Docker or Podman is only needed for container workflows.
+Nix with flakes is an optional extra: `./cc build`, `run`, `relock`, `gc`, `eval` and the project gates need it (until project adapters get a native backend), and `./cc check` adds `nix flake check` when it is installed. The one-line installers set up Nix (in WSL on Windows). Docker or Podman is only needed for container workflows.
 
 **Without `cc-kit`:** clone this repo as `cc_template/` inside an empty folder (or one holding a CC in another format), open that folder in your AI tool and say: "Create a Control Center here. Read `cc_template/BOOTSTRAP.md`, treat `cc_template` as read-only and start grilling." AI tools don't find skills inside a nested clone, so the prompt has to name `BOOTSTRAP.md`. `cc-kit new` and `cc-kit migrate` do this for you.
 
@@ -120,7 +122,7 @@ Requires Nix with flakes. Docker or Podman is only needed for container workflow
 | Plans with a lifecycle: active, archived, completed | `./cc plan`, `plans/` |
 | Trello on demand: link cards, preview then post comments or move cards | `./cc trello`, `cc-trello` |
 | `lean-code`, `debug` and `tdd` skills | `.agents/skills/` |
-| `cc.cmd`: run `.\cc check` from PowerShell or cmd | `cc.cmd` |
+| Native core: `./cc` and `cc.cmd` fetch the pinned uv and Python and run every CC check on Windows, macOS and Linux, with no WSL or Nix; Nix is an optional extra | `cc`, `cc.cmd`, `scripts/cc.py`, [decision 0033](docs/kit/decisions/0033-native-core-nix-optional.md) |
 | `./cc eval`: A/B-measure a change to the agent context with headless graded runs (pass rate, tokens, cost, time) | `scripts/eval/`, [decision 0019](docs/kit/decisions/0019-lean-agent-context.md) |
 
 The template contains no UI, no secrets and no production permissions.
@@ -138,10 +140,12 @@ The template contains no UI, no secrets and no production permissions.
 
 | Tool | Role in the CC |
 |---|---|
-| [Nix](https://nixos.org) with flakes, [nixpkgs](https://github.com/NixOS/nixpkgs) | Every build, test, check and app; pinned inputs; `./cc check`, `./cc verify` |
+| [uv](https://github.com/astral-sh/uv) (pinned in `.uv-pin`) | Runs `./cc` with the Python pinned in `uv.lock` on Windows, macOS and Linux |
+| [Nix](https://nixos.org) with flakes, [nixpkgs](https://github.com/NixOS/nixpkgs) (optional extra) | Project builds, tests and gates; pinned inputs; the `nix extra` row of `./cc check` |
 | Git | Repository catalog, feature worktrees, input overrides |
-| Python 3 | The `./cc` scripts: catalog, worktrees, plans, validation, councils |
-| WSL2 and PowerShell | Windows host gates (`ccLib.mkWindowsHostGate`) run the real Windows toolchain from WSL |
+| Python 3.14 (fetched by uv) | The `./cc` scripts: catalog, worktrees, plans, validation, councils, rule hooks |
+| Git Bash (Windows) | Runs the Claude Code rule hooks through the `cc` shim |
+| WSL2 and PowerShell (Nix extra on Windows) | Windows host gates (`ccLib.mkWindowsHostGate`) run the real Windows toolchain from WSL |
 | [Claude Code](https://github.com/anthropics/claude-code) CLI (`claude`) | Interactive work, and the Claude roles in councils, under the user's own subscription |
 | [Codex](https://github.com/openai/codex) CLI (`codex`) | Interactive work, and the GPT roles in councils, under the user's own ChatGPT login |
 | Cursor, OpenCode | Supported editors and agents; they read the same `.agents/skills` |

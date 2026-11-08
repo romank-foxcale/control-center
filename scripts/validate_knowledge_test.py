@@ -136,7 +136,25 @@ def check_stale_evidence() -> None:
               validator.stale_evidence(root) == expected, validator.stale_evidence(root))
 
 
+def check_outdated_requirements() -> None:
+    with tempfile.TemporaryDirectory() as directory:  # no .git: every file counts, as in a Nix source copy
+        root = Path(directory)
+        files = {
+            ".agents/skills/x/SKILL.md": "# X\n\nRun it.\nNix is required for this.\n",
+            "README.md": "build and gc need the optional Nix extra.\n",
+            "docs/kit/decisions/0032-old.md": "---\nid: old\nstatus: superseded\n---\n\nWSL is required.\n",
+            "plans/active/p.md": "Today `./cc` runs inside WSL.\n",
+        }
+        for name, content in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(content, encoding="utf-8")
+        found = validator.outdated_requirements(root)
+        check("a planted 'Nix is required' in a skill is reported with its line",
+              len(found) == 1 and found[0].startswith(".agents/skills/x/SKILL.md:4:"), found)
+
+
 def main() -> int:
+    check_outdated_requirements()
     check_stale_evidence()
     check_template_ships_an_empty_project_layer()
     check("a complete lesson passes", errors_for(LESSON) == [], errors_for(LESSON))

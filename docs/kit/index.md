@@ -3,7 +3,7 @@ id: kit.index
 title: Kit knowledge map
 status: active
 summary: What makes a CC a CC - its rules, architecture and decisions - owned by the kit, identical in every CC and replaced as a whole when the kit is updated.
-verified_at: 2026-10-15
+verified_at: 2026-11-08
 evidence:
   - AGENTS.md
 relations:
@@ -32,6 +32,7 @@ relations:
   - docs/kit/decisions/0029-risk-council.md
   - docs/kit/decisions/0030-disk-management.md
   - docs/kit/decisions/0032-code-center-keeps-nix-behind-the-center-contract.md
+  - docs/kit/decisions/0033-native-core-nix-optional.md
 ---
 
 # Kit knowledge map
@@ -85,4 +86,5 @@ This folder belongs to the kit. A CC never edits it: to change kit behaviour for
 - [Push only the tree a passing run tested, and run the change itself before calling it done](decisions/0028-verify-before-push.md)
 - [A change to architecture, dependencies, runtime, data or deployment gets a risk council before it is planned](decisions/0029-risk-council.md)
 - [A CC shows where its disk space goes and frees Nix space without touching CC state](decisions/0030-disk-management.md)
-- [code-center keeps Nix inside, in WSL, and joins the control-center hub only through the center contract](decisions/0032-code-center-keeps-nix-behind-the-center-contract.md)
+- [code-center keeps Nix inside, in WSL, and joins the control-center hub only through the center contract](decisions/0032-code-center-keeps-nix-behind-the-center-contract.md) (superseded by 0033)
+- [The CC core runs natively through uv on Windows, macOS and Linux; Nix is an optional extra](decisions/0033-native-core-nix-optional.md)

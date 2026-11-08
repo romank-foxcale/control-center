@@ -2,7 +2,7 @@
 
 A **Control Center (CC)** is a git repo that sits next to your project repos and teaches AI coding agents how the whole system fits together:
 
-- **how to build, test and run things**: as Nix code, which fails loudly when something drifts;
+- **how to build, test and run things**: as Nix code for your project repos, which fails loudly when something drifts; the CC itself runs natively on Windows, macOS and Linux;
 - **why things are the way they are**: short, linked Markdown notes in `docs/`;
 - **how to plan work**: two built-in agent skills that interview you before anything gets changed;
 - **how to code and test with several models**: councils in which Claude and GPT each propose, an anonymous judge decides, you approve, and a writer implements until `./cc verify` passes.
@@ -42,7 +42,17 @@ What happens:
 
 Want Codex or OpenCode too? Add `-Tools claude,codex,opencode` to the end of the second command.
 
-> Your Control Centers live inside Linux, in `~/Projects`, never under `C:\`. Nix and git are very slow on the Windows drive.
+> With this setup your Control Centers live inside Linux, in `~/Projects`, never under `C:\`. Nix and git are very slow on the Windows drive, and a Claude Code rule hook there is slower than its timeout.
+
+### Windows without WSL
+
+The installer above sets up WSL and Nix, which your project repos' build and test gates need today. The CC itself does not need them. With only [Git for Windows](https://git-scm.com/download/win) installed, clone a CC to a folder on `C:` and run, in PowerShell from that folder:
+
+```powershell
+.\cc.cmd doctor
+```
+
+The first run downloads the pinned uv and Python into the CC's `.cc-local` folder, which takes a minute. Run it once before you open Claude Code there, so the first rule hook does not wait for that download. Every CC command and check then runs natively. `.\cc.cmd verify` reports each project gate as not run until Nix is available (decision 0033).
 
 ### macOS
 
@@ -166,7 +176,7 @@ The agent turns it into an agreed plan with work packages and checks, saved in `
 
 **Always start coding with `./cc open my-feature`**, not by opening Claude Code or Codex inside `~/Projects/my-project_CC/worktrees/my-feature/<repo>_wt`. A session started inside a worktree doesn't get the CC's skills (`tdd`, `debug`, `lean-code`, …) or its rules, so it codes without them. `./cc open` starts the tool in the CC with the feature's worktrees added. If you do start a Claude session inside a worktree, it will tell you to restart.
 
-**From Windows without opening Ubuntu:** the `cc.cmd` launcher in the CC folder runs the same commands inside WSL for you, with the same output and exit code. In PowerShell type `.\cc check`, in cmd `cc check`, in Git Bash `./cc.cmd check`. It works whether the CC lives on `C:` or inside Ubuntu (`\\wsl.localhost\Ubuntu\home\...`). With several Linux distributions installed, set `CC_WSL_DISTRO` to the one with Nix.
+**On Windows:** a CC on the Windows drive runs natively. In PowerShell type `.\cc.cmd check`, in cmd `cc check`, in Git Bash `./cc check`. A CC inside Ubuntu is used from an Ubuntu terminal with `./cc`; use one side per CC folder.
 
 Other commands, run from the CC folder:
 
@@ -174,19 +184,19 @@ Other commands, run from the CC folder:
 |---|---|
 | `./cc verify` | Run every check plus each repo's target platform gates (e.g. the real Windows build) |
 | `./cc verify --quality` | Also run each repo's mutation gate: do the tests catch injected bugs? Warns for repos without one |
-| `./cc check` | Run every pure check: builds, tests, knowledge notes, skill sync |
+| `./cc check` | Run every CC check: tests, knowledge notes, skill sync; with Nix also `nix flake check` |
 | `./cc settings` | Settings panel: agents and their models, councils, repos, with a status line (logins, plans, runs). ←/→ switch tabs, ↑/↓ pick a row, `e` edits it (a role gets a model list of your logged-in subscriptions; a repo its main branch, link, kind, platforms, stack), `a` adds a repo by pasting its link, `d` removes one. `/cc-settings` opens this panel in the desktop app's Terminal panel; `./cc settings show` prints the same as text |
 | `./cc council status [run]` | Progress of council runs; for one run also what each working agent is doing right now |
-| `./cc doctor` | Check Nix, Docker and the `claude`/`codex` logins |
+| `./cc doctor` | Check uv, Python, git, Git Bash (Windows), Nix (optional), Docker and the `claude`/`codex` logins |
 | `./cc doctor --disk` | Where the disk space goes: Nix store, this CC's build links, `.cc-local`, caches, and on Windows the size of the WSL disk file. Changes nothing |
-| `./cc gc` / `./cc gc --apply` | Show, then free, Nix store space: removes this CC's `result` links and old Nix generations. Affects every CC on the machine; never touches `.cc-local` |
+| `./cc gc` / `./cc gc --apply` | (Nix extra) Show, then free, Nix store space: removes this CC's `result` links and old Nix generations. Affects every CC on the machine; never touches `.cc-local` |
 | `./cc backup --to DIR [--push]` | Copy the CC's Git history, uncommitted files, `.cc-local` state, the project clones' branches and changed worktree files to `DIR` (on Windows, a folder on `C:`); `--push` also sends it to the branch `cc-backup` of the CC's private GitHub repository, replacing the previous one. Set `backup.path` (and `backup.push: true`) in `control-center.json` to skip the options. Restore from GitHub: `git fetch origin cc-backup && git archive FETCH_HEAD \| tar -x -C <dir>`. Data you tag `irreplaceable` in `localData` is mirrored next to it (or to `backup.dataPath`, for example another drive), never deleted there and never pushed |
 | `./cc backup where` | Where every backup and data mirror is, with Windows paths, the GitHub link and the restore commands. Works in a fresh clone too. Exit 0 means every irreplaceable entry has a complete mirror |
 | `./cc backup restore <name>` | Copy a data entry back from its mirror, as it was at the last complete sync (`--all` also brings files deleted since) |
 | `./cc data remove <name> [--mirror]` | Delete a data entry (and its mirror). You type `<cc name>/<name>` to confirm; an agent cannot run it |
-| `./cc relock` | Lock the same nixpkgs as the kit, so CCs on one machine share their tools; run `./cc check` and `./cc verify` before you commit it |
-| `./cc show` | List everything that can be built, checked or run |
-| `./cc build <name>` / `./cc run <name>` | Build or run one thing |
+| `./cc relock` | (Nix extra) Lock the same nixpkgs as the kit, so CCs on one machine share their tools; run `./cc check` and `./cc verify` before you commit it |
+| `./cc show` | List the check groups and, with Nix, everything that can be built or run |
+| `./cc build <name>` / `./cc run <name>` | (Nix extra) Build or run one thing |
 | `./cc repo list` | Connected repos: kind, main branch, status |
 | `./cc repo update` | Fetch the base clones; fast-forward the read-only reference clones |
 | `./cc prs` | Open PRs of the connected repos, new ones marked (or ask "any new PRs?") |
