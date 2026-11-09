@@ -1,6 +1,7 @@
 #!/bin/sh
 # Run the CC on Linux, macOS and in Git Bash on Windows: find the pinned uv (download and check it on first use),
-# then run scripts/cc.py with the Python and dependencies locked in uv.lock. Why: plans/active/native-core.md
+# then run scripts/cc.py with the Python and dependencies locked in uv.lock.
+# Why: docs/kit/decisions/0033-native-core-nix-optional.md
 set -eu
 root=$(cd "$(dirname "$0")" && pwd)
 version=$(awk '$1 == "version" { print $2 }' "$root/.uv-pin")
@@ -11,6 +12,22 @@ case "$(uname -s)" in
   Linux) os=linux uv="$dir/uv" ;;
   *) echo "cc: unsupported OS $(uname -s)" >&2; exit 1 ;;
 esac
+
+# A rule hook runs on every tool call. After a pull that moves the pin, the new uv is not downloaded yet: a hook then uses
+# a uv already here, so open sessions keep working; the next command outside a hook downloads the pinned one.
+if [ "${1:-}" = hook ] && [ ! -x "$uv" ]; then
+  for other in "$root"/.cc-local/tools/uv/*/"${uv##*/}"; do [ -x "$other" ] && uv=$other; done
+fi
+# A rule hook must answer within Claude Code's 15 s hook timeout. A first download of uv and Python takes longer, fails
+# there and starts again on every tool call, so a hook on a CC that is not set up refuses at once instead.
+if [ "${1:-}" = hook ] && { [ ! -x "$uv" ] || [ ! -f "$root/.cc-local/venvs/$os/pyvenv.cfg" ]; }; then
+  text='The CC is not set up on this machine yet: run ./cc doctor (or .\\cc.cmd doctor) once in a terminal, then try again.'
+  case "${2:-}" in
+    pre-*) printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "%s"}}\n' "$text" ;;
+    *) printf '{"systemMessage": "%s"}\n' "$text" ;;
+  esac
+  exit 0
+fi
 
 fetch_uv() {
   case "$(uname -m)" in
@@ -51,7 +68,8 @@ if [ ! -x "$uv" ]; then
   fi
 fi
 
-export PYTHONUTF8=1 UV_PYTHON_PREFERENCE=only-managed
+# UV_NO_CONFIG: a uv.toml of the user (an index, a cache, a Python preference) must not change how the CC runs.
+export PYTHONUTF8=1 UV_NO_CONFIG=1 UV_PYTHON_PREFERENCE=only-managed
 export UV_PYTHON_INSTALL_DIR="$root/.cc-local/tools/python" UV_PROJECT_ENVIRONMENT="$root/.cc-local/venvs/$os"
 # Claude Code runs every rule hook as `cc hook <event>`. It goes straight to the guard, not through cc.py, so an edit that
 # breaks cc.py or a rule module cannot block the Read and Edit that repair it (scripts/hook_guard.py).
