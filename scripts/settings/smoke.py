@@ -6,9 +6,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from app import Ask, ChoicePicker, ModelPicker, Settings, show  # noqa: E402
@@ -56,6 +58,7 @@ async def check(root: Path) -> None:
         assert "×   ×" in face, f"a stalled run must make the mascot grim:\n{face}"
         assert "1 waiting for you" in summary and "1/1 repos verified" in summary, summary
         assert "stalled" in summary, summary
+        assert "nix: optional, not installed" in summary and "nix missing" not in summary, f"Nix is optional:\n{summary}"
         assert [pane.id for pane in app.query("TabPane")] == ["agents", "councils", "repos", "trello"], "settings only"
         for table, rows in (("#t-agents", 1), ("#t-councils", 1), ("#t-repos", 2)):
             assert app.query_one(table, DataTable).row_count == rows, table
@@ -162,7 +165,7 @@ async def check(root: Path) -> None:
         app.action_refresh()
 
     text = show(snapshot(root))
-    for expected in ("x_CC · ready", "1 waiting for you", "AGENTS", "judge", "COUNCILS", "approval on", "REPOS", "csharp", "develop", "reference", "TRELLO", "not connected"):
+    for expected in ("x_CC · ready", "nix: optional, not installed", "1 waiting for you", "AGENTS", "judge", "COUNCILS", "approval on", "REPOS", "csharp", "develop", "reference", "TRELLO", "not connected"):
         assert expected in text, f"show must contain {expected!r}:\n{text}"
 
     # Run progress, as ./cc council status prints it.
@@ -178,7 +181,11 @@ def main() -> int:
         # Independent of the machine: no Trello credentials unless the test creates them.
         os.environ["CC_TRELLO_ENV"] = str(Path(directory) / "no-trello.env")
         os.environ.pop("TRELLO_TOKEN", None)
-        asyncio.run(check(fixture(Path(directory))))
+        # Independent of the machine: Nix is absent, so the panel must show it as optional, not as a problem.
+        real_which = shutil.which
+        with mock.patch.object(shutil, "which", side_effect=lambda name, *rest, **options:
+                               None if name == "nix" else real_which(name, *rest, **options)):
+            asyncio.run(check(fixture(Path(directory))))
     print("settings smoke test passed")
     return 0
 

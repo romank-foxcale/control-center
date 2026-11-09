@@ -21,7 +21,7 @@ from textual.widgets import Button, DataTable, Footer, Input, Label, OptionList,
 from textual.widgets.option_list import Option
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from state import Snapshot, snapshot  # noqa: E402
+from state import Snapshot, snapshot, tool_text  # noqa: E402
 import hostos  # noqa: E402  (state.py puts scripts/ on the path)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "council"))
 from progress import SPINNER  # noqa: E402  shared with the council runner
@@ -265,7 +265,7 @@ class Settings(App):
         )
         self.query_one("#mascot", Static).update(mascot(face))
         active_plans = [plan for plan in state.plans if plan["lifecycle"] == "active"]
-        tools = "  ".join(f"{tool} {'✓' if ok else '✗'}" for tool, ok in state.tools.items())
+        tools = "  ".join(tool_text(tool, ok, "✓", "✗") for tool, ok in state.tools.items())
         verified = sum(repo["status"] == "verified" for repo in state.projects)
         spinner = f"{SPINNER[int(time.time()) % len(SPINNER)]} " if state.active_runs else ""
         summary = (
@@ -481,7 +481,7 @@ class Settings(App):
 
 def show(state: Snapshot) -> str:
     """The settings as text, for sessions (the cc-settings skill) and terminals without the panel."""
-    tools = "  ".join(f"{tool} {'ok' if ok else 'MISSING'}" for tool, ok in state.tools.items())
+    tools = "  ".join(tool_text(tool, ok, "ok", "MISSING") for tool, ok in state.tools.items())
     active_plans = sum(plan["lifecycle"] == "active" for plan in state.plans)
     verified = sum(repo["status"] == "verified" for repo in state.projects)
     lines = [
