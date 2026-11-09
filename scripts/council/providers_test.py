@@ -60,6 +60,50 @@ emit({"type": "result", "subtype": "success", "result": "I'll check the code fir
 """
 
 
+# The fake Codex answers `login status`, and for `exec` replies with the next entry of FAKE_CODEX_REPLIES (the last one
+# repeats), as the real CLI does: JSONL events on stdout and the final message in --output-last-message. The reply
+# READ is the content of secret.txt in its --cd folder. FAKE_CODEX_WRITE makes it write into that folder itself.
+FAKE_CODEX = """
+import json, os, sys
+from pathlib import Path
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
+if sys.argv[1:] == ["login", "status"]:
+    print("Logged in using ChatGPT")
+    sys.exit(0)
+argv = sys.argv[1:]
+cwd = Path(argv[argv.index("--cd") + 1])
+prompt = sys.stdin.read()
+seen = Path(os.environ["FAKE_CODEX_SEEN"])
+calls = json.loads(seen.read_text(encoding="utf-8")) if seen.exists() else []
+replies = json.loads(os.environ["FAKE_CODEX_REPLIES"])
+reply = replies[min(len(calls), len(replies) - 1)]
+if reply == "READ":
+    reply = (cwd / "secret.txt").read_text(encoding="utf-8").strip() + " BLOCKED"
+calls.append({"argv": argv, "prompt": prompt})
+seen.write_text(json.dumps(calls), encoding="utf-8")
+if os.environ.get("FAKE_CODEX_WRITE"):
+    (cwd / "calc.py").write_text("tampered\\n", encoding="utf-8")
+print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": reply}}), flush=True)
+print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 5}}), flush=True)
+with open(argv[argv.index("--output-last-message") + 1], "w", encoding="utf-8", newline="") as last:
+    last.write(reply)
+"""
+
+CALC = "def add(a, b):\n    return a - b\n"
+FIXED = "def add(a, b):\n    return a + b\n"
+CALC_DIFF = """diff --git a/calc.py b/calc.py
+--- a/calc.py
++++ b/calc.py
+@@ -1,2 +1,2 @@
+ def add(a, b):
+-    return a - b
++    return a + b
+"""
+# Wrong context: `git apply --check` rejects it.
+STALE_DIFF = CALC_DIFF.replace("-    return a - b", "-    return a * b")
+
+
 def install_cli(bin_dir: Path, name: str, source: str) -> None:
     """A fake CLI found on PATH by its bare name, as the real one is: an npm-style .cmd shim on Windows, a shell
     script elsewhere; both start the Python source with this interpreter."""
@@ -113,7 +157,157 @@ def check_timeout_stops_the_tree(role: dict, worktree: Path, log: Path, base: Pa
     assert wait_dead(child, 5), f"the shim's child {child} outlived the timeout"
 
 
+def check_codex_windows_flags() -> None:
+    """On Windows every Codex role gets the unelevated Windows sandbox, and a writer runs read-only (diff mode);
+    elsewhere nothing changes."""
+    codex = {"id": "w", "provider": "codex", "model": "m", "access": "write-worktree"}
+    saved = providers.WINDOWS
+    try:
+        providers.WINDOWS = True
+        for access in ("read-only", "read-only-web", "write-worktree"):
+            argv = providers.command({**codex, "access": access}, Path("."), Path("l"))
+            assert argv[argv.index("--sandbox") + 1] == "read-only", (access, argv)
+            assert 'windows.sandbox="unelevated"' in argv, (access, argv)
+            assert argv[argv.index('windows.sandbox="unelevated"') - 1] == "--config", argv
+        assert providers.diff_mode(codex) and not providers.diff_mode({**codex, "access": "read-only"})
+        assert not providers.diff_mode({**codex, "provider": "claude"}), "Claude writes through its own tools"
+        claude = providers.command({**codex, "provider": "claude"}, Path("."), Path("l"))
+        assert not any("windows.sandbox" in part for part in claude), claude
+        providers.WINDOWS = False
+        argv = providers.command(codex, Path("."), Path("l"))
+        assert argv[argv.index("--sandbox") + 1] == "workspace-write", argv
+        assert not any("windows.sandbox" in part for part in argv), argv
+        assert not providers.diff_mode(codex)
+    finally:
+        providers.WINDOWS = saved
+
+
+def check_diff_parsing() -> None:
+    block = lambda body: f"```diff\n{body}```"
+    other = CALC_DIFF.replace("calc.py", "other.py")
+    assert providers.last_diff(f"First try:\n{block(other)}\nBetter:\n{block(CALC_DIFF)}\nDone.") == CALC_DIFF, "the last block"
+    assert providers.last_diff("No change is needed.\n```python\nx = 1\n```") is None, "only a diff block counts"
+    assert providers.unsafe_paths(CALC_DIFF) == []
+    new_file = "diff --git a/n.py b/n.py\nnew file mode 100644\n--- /dev/null\n+++ b/n.py\n@@ -0,0 +1 @@\n+x = 1\n"
+    assert providers.unsafe_paths(new_file) == [], "/dev/null is not a path"
+    # A removed line that reads like a header is hunk content, not a path.
+    sql = "diff --git a/q.sql b/q.sql\n--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1 @@\n--- ../comment\n select 1\n"
+    assert providers.unsafe_paths(sql) == [], providers.unsafe_paths(sql)
+    for bad in ("../outside.py", "/etc/passwd", "C:/Windows/x.py", ".git/hooks/pre-commit", "src/../../x.py", ".GIT/config",
+                "vendor/lib/.git/config"):
+        diff = CALC_DIFF.replace("calc.py", bad)
+        assert bad in providers.unsafe_paths(diff), (bad, providers.unsafe_paths(diff))
+    rename = "diff --git a/calc.py b/.git/config\nsimilarity index 100%\nrename from calc.py\nrename to .git/config\n"
+    assert ".git/config" in providers.unsafe_paths(rename), "a rename is a write too"
+    link = "diff --git a/l b/l\nnew file mode 120000\n--- /dev/null\n+++ b/l\n@@ -0,0 +1 @@\n+/etc\n"
+    assert providers.unsafe_paths(link), "a symlink could point a later write outside the worktree"
+
+
+def check_codex_diff_mode(base: Path) -> None:
+    """A Codex writer on Windows replies with a diff; the runner checks and applies it, retries once, and fails closed."""
+    install_cli(base / "bin", "codex", FAKE_CODEX)
+    seen = base / "codex-seen.json"
+    repo = base / "diffrepo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "core.autocrlf", "false"], check=True)
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    (repo / "calc.py").write_bytes(CALC.encode())
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
+    writer = {"id": "writer", "provider": "codex", "model": "m", "access": "write-worktree"}
+    log = base / "logs" / "write-0.log"  # outside the worktree, as in a council run
+
+    def call(*replies: str, write: bool = False) -> tuple[str, list[dict]]:
+        seen.unlink(missing_ok=True)
+        os.environ["FAKE_CODEX_REPLIES"] = json.dumps(list(replies))
+        os.environ.pop("FAKE_CODEX_WRITE", None)
+        if write:
+            os.environ["FAKE_CODEX_WRITE"] = "1"
+        try:
+            return providers.run(writer, "# Task\n\nFix add.", repo, log), json.loads(seen.read_text(encoding="utf-8"))
+        finally:
+            os.environ.pop("FAKE_CODEX_WRITE", None)
+
+    def reset(content: bytes = CALC.encode()) -> None:
+        (repo / "calc.py").write_bytes(content)
+
+    os.environ["FAKE_CODEX_SEEN"] = str(seen)
+    saved = providers.WINDOWS
+    try:
+        providers.WINDOWS = True
+        reply, calls = call(f"Fixed the sign.\n```diff\n{CALC_DIFF}```")
+        assert (repo / "calc.py").read_bytes() == FIXED.encode(), (repo / "calc.py").read_bytes()
+        assert reply.startswith("Fixed the sign."), reply
+        assert len(calls) == 1 and calls[0]["prompt"].startswith("# Task\n\nFix add."), calls
+        assert "```diff" in calls[0]["prompt"] and "a/ and b/" in calls[0]["prompt"], "the prompt asks for a diff"
+        assert calls[0]["argv"][calls[0]["argv"].index("--sandbox") + 1] == "read-only", calls[0]["argv"]
+        assert "diff mode: applied" in log.read_text(encoding="utf-8"), log.read_text(encoding="utf-8")
+
+        # A file checked out with CRLF keeps its line endings.
+        reset(CALC.replace("\n", "\r\n").encode())
+        call(f"```diff\n{CALC_DIFF}```")
+        assert (repo / "calc.py").read_bytes() == FIXED.replace("\n", "\r\n").encode(), (repo / "calc.py").read_bytes()
+
+        reset()
+        reply, calls = call("The code is already correct.")
+        assert (repo / "calc.py").read_bytes() == CALC.encode() and len(calls) == 1
+        assert "no change" in log.read_text(encoding="utf-8"), "no diff block is no change, and the log says so"
+
+        for bad in ("../calc.py", ".git/config"):
+            try:
+                call(f"```diff\n{CALC_DIFF.replace('calc.py', bad)}```")
+                raise AssertionError(f"a diff that touches {bad} must be refused")
+            except providers.ProviderError as error:
+                assert bad in str(error), error
+            assert (repo / "calc.py").read_bytes() == CALC.encode(), "nothing is applied"
+
+        # A diff that does not apply gets one retry with the git error and the rejected diff.
+        reply, calls = call(f"```diff\n{STALE_DIFF}```", f"Corrected.\n```diff\n{CALC_DIFF}```")
+        assert (repo / "calc.py").read_bytes() == FIXED.encode(), "the corrected diff is applied"
+        assert len(calls) == 2 and reply.startswith("Corrected."), (len(calls), reply)
+        retry = calls[1]["prompt"]
+        assert retry.startswith("# Task\n\nFix add.") and "return a * b" in retry and "error" in retry.lower(), retry
+
+        reset()
+        try:
+            call(f"```diff\n{STALE_DIFF}```")
+            raise AssertionError("a diff that fails twice must fail the call")
+        except providers.ProviderError as error:
+            assert str(log) in str(error), error
+        assert len(json.loads(seen.read_text(encoding="utf-8"))) == 2, "one retry, no more"
+        assert (repo / "calc.py").read_bytes() == CALC.encode()
+
+        # The sandbox should stop it, but if the model writes the worktree itself, the call fails and no diff is applied.
+        try:
+            call(f"```diff\n{CALC_DIFF}```", write=True)
+            raise AssertionError("a writer that changed the worktree itself must fail")
+        except providers.ProviderError as error:
+            assert "changed the worktree" in str(error), error
+        assert (repo / "calc.py").read_text(encoding="utf-8") == "tampered\n", "the diff is not applied on top"
+
+        # Linux and macOS: the writer edits in its workspace-write sandbox, and its reply is not applied.
+        providers.WINDOWS = False
+        reset()
+        reply, calls = call(f"```diff\n{CALC_DIFF}```")
+        assert "```diff" not in calls[0]["prompt"] and (repo / "calc.py").read_bytes() == CALC.encode(), calls
+    finally:
+        providers.WINDOWS = saved
+
+
+def check_probe(base: Path) -> None:
+    """The probe passes only when the role wrote nothing and could read: a reply without the file's secret fails it."""
+    os.environ.update({"FAKE_CODEX_SEEN": str(base / "probe-seen.json"), "FAKE_CODEX_REPLIES": json.dumps(["READ"])})
+    passed, line = providers.probe("codex", "m", base / "probe")
+    assert passed and "can read" in line and "no writes" in line, line
+    os.environ["FAKE_CODEX_REPLIES"] = json.dumps(["BLOCKED"])
+    passed, line = providers.probe("codex", "m", base / "probe")
+    assert not passed and "cannot read" in line, line
+    assert not any((base / "probe").iterdir()), "the probe folder is removed"
+
+
 def main() -> int:
+    check_codex_windows_flags()
+    check_diff_parsing()
     with tempfile.TemporaryDirectory() as directory:
         base = Path(directory)
         bin_dir = base / "bin"
@@ -222,6 +416,8 @@ def main() -> int:
 
         check_utf8_round_trip(role, worktree, log)
         check_timeout_stops_the_tree(role, worktree, log, base)
+        check_codex_diff_mode(base)
+        check_probe(base)
 
     # read-only-web: web search and fetch on top of reading, and nothing else; plain read-only gets no web.
     # Claude's dontAsk mode denies WebSearch unless it is also allowed (checked with the real CLI, 2026-10).
