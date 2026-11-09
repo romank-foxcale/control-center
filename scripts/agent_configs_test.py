@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Test ./cc agents: sync owns only the hooks key of .claude/settings.json, and check catches hand edits to it."""
+"""Test ./cc agents: sync owns the hooks key of .claude/settings.json and the PowerShell twins of ./cc allow
+rules, and check catches hand edits to them."""
 
 from __future__ import annotations
 
@@ -24,13 +25,19 @@ def main() -> int:
         (root / "CLAUDE.md").write_text("@AGENTS.md\n")
         settings = root / ".claude/settings.json"
         settings.parent.mkdir()
-        permissions = {"allow": ["Bash(./cc help)"]}
+        permissions = {"allow": ["Bash(./cc help)", "Bash(./cc show:*)", "Bash(git status)"], "deny": ["Bash(rm:*)"]}
         settings.write_text(json.dumps({"permissions": permissions, "hooks": {"Stop": []}}))
 
         assert run(root, "check").returncode == 1, "a hooks block that differs is drift"
         assert run(root, "sync").returncode == 0
         synced = json.loads(settings.read_text())
-        assert synced["permissions"] == permissions, "sync leaves the permissions alone"
+        # Each ./cc allow rule gets a PowerShell twin for cc.cmd right after it; every other rule stays as it was.
+        assert synced["permissions"] == {
+            "allow": ["Bash(./cc help)", "PowerShell(.\\cc.cmd help)", "Bash(./cc show:*)",
+                      "PowerShell(.\\cc.cmd show:*)", "Bash(git status)"],
+            "deny": ["Bash(rm:*)"]}, synced["permissions"]
+        assert run(root, "sync").returncode == 0
+        assert json.loads(settings.read_text())["permissions"] == synced["permissions"], "a second sync adds nothing"
         # Every entry runs the shim in shell form and blocks when the hook itself fails (spike S2).
         expected = {
             ("PreToolUse", "Bash|PowerShell"): "pre-bash",
@@ -59,6 +66,13 @@ def main() -> int:
             settings.write_text(json.dumps(changed))
             result = run(root, "check")
             assert result.returncode == 1 and "hooks differ" in result.stderr, f"a hand-changed {field} is drift"
+        settings.write_text(json.dumps(synced))
+
+        twinless = json.loads(json.dumps(synced))
+        twinless["permissions"]["allow"].remove("PowerShell(.\\cc.cmd show:*)")
+        settings.write_text(json.dumps(twinless))
+        result = run(root, "check")
+        assert result.returncode == 1 and "PowerShell(.\\cc.cmd show:*)" in result.stderr, "a missing twin is drift"
         settings.write_text(json.dumps(synced))
 
         synced["hooks"]["PreToolUse"].pop()

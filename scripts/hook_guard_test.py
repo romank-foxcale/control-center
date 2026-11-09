@@ -70,6 +70,28 @@ class Guard(unittest.TestCase):
         self.assertEqual(self.decision(self.hook("pre-read", {"tool_input": {"file_path": outside}})[1]), "ask")
         self.assertEqual(self.decision(self.hook("pre-read", {"tool_input": {"pattern": "x", "path": str(self.root.parent)}})[1]), "ask")
 
+    def test_a_path_alias_out_of_scripts_is_denied(self) -> None:
+        """The guard compares where a path really leads: a link inside scripts/ to another folder and a .. escape name
+        a file under scripts/ only in their spelling."""
+        outside = Path(self.temporary.name) / "outside"
+        outside.mkdir()
+        for name, target in (("to_docs", self.root / "docs"), ("to_outside", outside)):
+            link = self.root / "scripts" / name
+            try:
+                link.symlink_to(target, target_is_directory=True)
+            except OSError:  # Windows without Developer Mode refuses symlinks: a junction is the same alias
+                import _winapi
+                _winapi.CreateJunction(str(target), str(link))
+            for path in (str(link / "x.py"), f"scripts/{name}/x.py"):
+                code, output, _ = self.hook("pre-edit", {"tool_name": "Write", "tool_input": {"file_path": path}})
+                self.assertEqual((code, self.decision(output)), (0, "deny"), path)
+        for path in ("scripts/../docs/x.md", "scripts/../../outside/x.py", str(self.root / "scripts" / ".." / ".." / "x.py"),
+                     "scripts\\..\\docs\\x.md" if os.name == "nt" else "scripts/./../docs/x.md"):
+            code, output, _ = self.hook("pre-edit", {"tool_name": "Edit", "tool_input": {"file_path": path}})
+            self.assertEqual((code, self.decision(output)), (0, "deny"), path)
+        code, output, _ = self.hook("pre-edit", {"tool_name": "Edit", "tool_input": {"file_path": "scripts/sub/../hostos.py"}})
+        self.assertEqual((code, self.decision(output)), (0, None), "a .. that stays inside scripts/ is still scripts/")
+
     def test_reports_never_block(self) -> None:
         for event in ("post-edit", "post-read", "stop", "session-start"):
             code, output, _ = self.hook(event, {})

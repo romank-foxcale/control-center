@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # cc-kit: create and open Control Centers from this kit. Installed into
-# ~/.local/bin by install/install.sh; works on macOS, Linux and WSL2.
+# ~/.local/bin by install/install.sh; works on macOS, Linux and WSL2. In Git Bash
+# on Windows it hands over to install/windows/cc-kit.ps1.
 set -euo pipefail
+
+# Git Bash on Windows: the native Windows cc-kit does the work (decision 0033), so no WSL is needed.
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*)
+    windows_kit="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/windows/cc-kit.ps1"
+    exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$windows_kit")" "$@"
+    ;;
+esac
 
 # Resolve the ~/.local/bin symlink back to the kit clone.
 self="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"

@@ -91,6 +91,10 @@ def materialize(source: Path, target: Path) -> None:
 
     if not (target / ".git").exists():
         subprocess.run(["git", "init", "-b", "main", str(target)], check=True)
+    # Stage the shim as executable: on Windows git init sets core.filemode=false, so a plain `git add` would record
+    # 100644 and ./cc (and every Claude Code hook) would fail with "Permission denied" in a macOS or Linux clone.
+    # With core.filemode=false, later `git add -A` runs keep the mode already in the index.
+    subprocess.run(["git", "-C", str(target), "add", "--chmod=+x", "--", "cc"], check=True)
 
 
 def main() -> int:

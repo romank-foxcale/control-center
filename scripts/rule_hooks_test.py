@@ -94,6 +94,19 @@ def check_edits(root: Path) -> None:
     assert pre_edit({"tool_name": "Write", "tool_input": {"file_path": str(root.parent.parent / "elsewhere.md")}}, root) is None, \
         "outside the CC: worktrees, scratchpad, memory"
 
+    # The files every hook runs through: a broken one blocks every call and only the user can repair it.
+    for name in ("pyproject.toml", "uv.lock", ".uv-pin", "cc", "cc.cmd", "cc.ps1", "scripts/hook_guard.py"):
+        for tool in ("Edit", "Write"):
+            asked = pre_edit(edit(root, name, tool), root)
+            assert decision(asked) == "ask" and "only the user can repair" in \
+                asked["hookSpecificOutput"]["permissionDecisionReason"], (name, tool, asked)
+    relative = {"tool_name": "Edit", "tool_input": {"file_path": "../cc.cmd"}, "cwd": str(root / "scripts")}
+    assert decision(pre_edit(relative, root)) == "ask", "a relative spelling is the same file"
+    if os.path.normcase("A") == "a":
+        assert decision(pre_edit(edit(root, "PyProject.TOML", "Edit"), root)) == "ask", "letter case on Windows"
+    for name in ("scripts/hook_guard_test.py", "scripts/cc", "docs/uv.lock", "cc.py", "scripts/rule_hooks.py"):
+        assert decision(pre_edit(edit(root, name, "Edit"), root)) != "ask", name
+
 
 def check_notes_and_drift() -> None:
     """Run against a copy of this CC so the real validator and drift check are exercised."""
@@ -185,6 +198,66 @@ def check_reference_repos(base: Path) -> None:
     assert read("s1", file_path="repos/project/shop-backend/pom.xml") is None, "project repos need no reminder"
 
 
+def check_post_read_is_cheap(base: Path) -> None:
+    """post-read runs after every read: with no reference repo in the CC it returns before any path or file work."""
+    root = base / "cheap" / "alpha_CC"
+    root.mkdir(parents=True)
+    event = {"tool_name": "Read", "tool_input": {"file_path": "repos/reference/x/a.py"}, "cwd": str(root), "session_id": "s"}
+
+    def no_work(*arguments: object, **keywords: object) -> None:
+        raise AssertionError("post-read resolved a path although no reference repo exists")
+    real_resolve = rule_hooks.resolve
+    rule_hooks.resolve = no_work  # type: ignore[assignment]
+    try:
+        assert rule_hooks.post_read(event, root) is None, "no repos/reference folder"
+        (root / "repos" / "reference").mkdir(parents=True)
+        assert rule_hooks.post_read(event, root) is None, "an empty repos/reference folder"
+    finally:
+        rule_hooks.resolve = real_resolve  # type: ignore[assignment]
+    assert not (root / ".cc-local").exists(), "nothing written"
+    (root / "repos" / "reference" / "x").mkdir()
+    assert rule_hooks.post_read(event, root), "with a reference repo the reminder still comes"
+
+
+def check_unusual_paths(base: Path) -> None:
+    """UNC shares, another drive letter and non-ASCII names: no gate raises on them, and a protected path spelled that
+    way is still refused."""
+    root = base / "unusual" / "Проект_CC"
+    data = root / ".cc-local" / "data" / "эмбеддинги"
+    data.mkdir(parents=True)
+    (root / ".cc-local" / "hooks").mkdir()
+    (root / "repos" / "reference" / "пример").mkdir(parents=True)
+    (root.parent / "другой_CC").mkdir()
+    (root / "control-center.json").write_text(json.dumps({"localData": [
+        {"name": "emb", "path": ".cc-local/data/эмбеддинги", "tags": ["irreplaceable"]}]}, ensure_ascii=False),
+        encoding="utf-8")
+    unc, drive = "\\\\cc-test-server\\share\\cc-backups\\emb", "Q:\\cc-backups\\emb"
+    (root / ".cc-local/hooks/backup-locations.json").write_text(json.dumps({"mirrors": {"emb": [unc, drive]}}),
+                                                                 encoding="utf-8")
+
+    def edit(path: str) -> str | None:
+        return decision(rule_hooks.pre_edit({"tool_name": "Write", "tool_input": {"file_path": path}, "cwd": str(root)}, root))
+
+    def read(path: str) -> str | None:
+        return decision(rule_hooks.pre_read({"tool_name": "Read", "tool_input": {"file_path": path}, "cwd": str(root)}, root))
+
+    def shell(command: str) -> str | None:
+        return decision(rule_hooks.pre_bash({"tool_input": {"command": command}, "cwd": str(root)}, root))
+
+    for path in (f"{unc}\\part.parquet", f"{drive}\\part.parquet", str(data / "часть.parquet")):
+        assert edit(path) == "deny", path
+    for path in (unc, drive, str(data)):
+        assert shell(f"rm -rf '{path}'") == "deny", path
+        assert shell(f"Remove-Item -Recurse -Force '{path}'") == "deny", path
+    assert edit(str(root / "repos" / "reference" / "пример" / "файл.py")) == "deny", "a reference repo with a non-ASCII name"
+    assert read(str(root.parent / "другой_CC" / "заметки.md")) == "ask", "another project with a non-ASCII name"
+    for path in ("\\\\cc-test-server\\share\\other\\x.txt", "Q:\\elsewhere\\x.py", str(root / "docs" / "заметка.txt")):
+        assert edit(path) is None, path
+        assert read(path) is None, path
+        assert shell(f"cat '{path}'") is None, path
+    assert read("\\\\cc-test-server\\share") is None and shell("ls \\\\cc-test-server\\share") is None
+
+
 def check_cli() -> None:
     """Hooks run with onFailure block: any exit but 0 or 2 blocks the call. A gate that fails blocks on purpose with
     exit 2 and says why; a failing non-gate hook reports through systemMessage and exits 0, so it never traps the
@@ -204,7 +277,7 @@ def check_cli() -> None:
                "rule_hooks.HANDLERS[sys.argv[2]] = broken\nsys.argv = ['rule_hooks.py', sys.argv[2]]\n"
                "raise SystemExit(rule_hooks.main())")
     for event_name in rule_hooks.HANDLERS:
-        ran = subprocess.run([sys.executable, "-c", failing, str(SCRIPT.parent), event_name], input="{}",
+        ran = subprocess.run([sys.executable, "-c", failing, str(SCRIPT.parent), event_name], input='{"tool_input": {}}',
                              capture_output=True, text=True)
         if event_name in ("pre-bash", "pre-read", "pre-edit"):
             assert ran.returncode == 2 and ran.stdout == "", (event_name, ran)
@@ -213,6 +286,17 @@ def check_cli() -> None:
         else:
             assert ran.returncode == 0, (event_name, ran)
             assert json.loads(ran.stdout) == {"systemMessage": f"rule hook {event_name} failed: boom"}, (event_name, ran)
+    # A gate with no tool call to check (empty stdin, no tool_input object) blocks; it used to allow, since {} has
+    # nothing to refuse. The reporting hooks keep reading such an event as before.
+    for event_name in ("pre-bash", "pre-read", "pre-edit"):
+        for payload in (b"", b"{}", b'{"tool_input": "rm -rf /"}', b'{"tool_input": null}', b"[]"):
+            ran = subprocess.run([sys.executable, str(SCRIPT), event_name], input=payload, capture_output=True)
+            assert ran.returncode == 0, (event_name, payload, ran)
+            output = json.loads(ran.stdout)["hookSpecificOutput"]
+            assert output["permissionDecision"] == "deny" and output["permissionDecisionReason"] == \
+                "the hook got no tool call to check, so the call is blocked", (event_name, payload, output)
+    quiet = subprocess.run([sys.executable, str(SCRIPT), "post-read"], input=b"", capture_output=True)
+    assert quiet.returncode == 0 and quiet.stdout == b"", quiet
     for arguments in ([], ["no-such-event"], ["pre-bash", "extra"]):
         usage = subprocess.run([sys.executable, str(SCRIPT), *arguments], input="{}", capture_output=True, text=True)
         assert usage.returncode == 2 and usage.stderr.startswith("usage: rule_hooks.py <pre-bash|"), (arguments, usage)
@@ -391,6 +475,100 @@ def check_verify_before_push(base: Path) -> None:
     assert push("git push", outside) is None, "another project is the isolation hook's business"
     assert push("git push", base) is None, "not a Git repository"
 
+    # A host without Nix says why a project's gates cannot run here (decision 0033); with Nix it does not.
+    real_resolve = hostos.resolve_exe
+    for nix, says in ((None, True), ("/usr/bin/nix", False)):
+        hostos.resolve_exe = lambda name, nix=nix: nix if name == "nix" else real_resolve(name)
+        try:
+            commit(worktree, "a.txt", f"unverified {nix}")
+            reason = push("git push", worktree)["hookSpecificOutput"]["permissionDecisionReason"]
+            assert ("this host has no nix, so the nix-defined project gates cannot run here" in reason.lower() and "0033" in reason) == says, (nix, reason)
+            commit(cc, "a.txt", f"unverified {nix}")
+            reason = push("git push")["hookSpecificOutput"]["permissionDecisionReason"]
+            assert "0033" not in reason, "the CC's own push needs only ./cc check, which runs without Nix"
+        finally:
+            hostos.resolve_exe = real_resolve
+
+
+def check_nix_part_before_push(base: Path) -> None:
+    """Pushed commits that change a *.nix file, a flake.lock or catalog/ need a stamp whose run included the Nix part;
+    other changes need only the stamp. What is pushed: since the upstream's merge base, else every file of HEAD."""
+    cc = base / "nixpush" / "alpha_CC"
+    remote = base / "nixpush" / "origin.git"
+    cc.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(cc)], check=True)
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    git = ["git", "-C", str(cc), "-c", "user.name=t", "-c", "user.email=t@t"]
+
+    def commit(name: str, text: str) -> None:
+        (cc / name).parent.mkdir(parents=True, exist_ok=True)
+        (cc / name).write_text(text, encoding="utf-8")
+        subprocess.run([*git, "add", name], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", text], check=True)
+
+    def push() -> str | None:
+        result = pre_bash({"tool_input": {"command": "git push"}, "cwd": str(cc)}, cc)
+        return result["hookSpecificOutput"]["permissionDecisionReason"] if result else None
+
+    commit("a.txt", "one")
+    verified.record(cc, cc, "check")
+    assert push() is None, "no remote yet: every file of HEAD is pushed, and none is a Nix input"
+    commit("flake.nix", "{ }")
+    verified.record(cc, cc, "check")
+    reason = push()
+    assert reason and "nix flake check did not run" in reason and "flake.nix" in reason, reason
+    verified.record(cc, cc, "check", nix=False)
+    assert push(), "a run that skipped Nix does not cover a Nix change"
+    verified.record(cc, cc, "check", nix=True)
+    assert push() is None, "the Nix part ran on this tree"
+
+    subprocess.run([*git, "remote", "add", "origin", str(remote)], check=True)
+    subprocess.run([*git, "push", "-q", "-u", "origin", "main"], check=True, capture_output=True)
+    commit("a.txt", "two")
+    verified.record(cc, cc, "check")
+    assert push() is None, "flake.nix is already upstream; only a.txt is pushed"
+    for name in ("sub/flake.lock", "catalog/repos.json", "nix/projects/api.nix"):
+        commit(name, f"{name} changed")
+        verified.record(cc, cc, "check")
+        reason = push()
+        assert reason and name in reason, (name, reason)
+    for name in ("docs/flake.nix.md", "catalogue/x.json", "flake.locked"):
+        commit(name, "look-alike")
+    verified.record(cc, cc, "check")
+    reason = push()
+    assert reason and "catalog/repos.json" in reason and "flake.locked" not in reason and "catalogue" not in reason \
+        and "docs/flake.nix.md" not in reason, reason
+
+
+def check_stamp_nix_field(base: Path) -> None:
+    """The stamp keeps "nix" when a run gives it; an old stamp without the key reads as unknown; true stays true."""
+    root = base / "stamps"
+    root.mkdir()
+    tree = "0" * 40
+    (verified.stamps(root)).mkdir(parents=True)
+    (verified.stamps(root) / tree).write_text(json.dumps({"kinds": ["check"], "repository": "x", "at": "t"}), encoding="utf-8")
+    assert "nix" not in verified.lookup(root, tree), "an old stamp stays readable: no key means unknown"
+    verified.record(root, root, "check", tree=tree)
+    assert "nix" not in verified.lookup(root, tree), "no value given, none invented"
+    verified.record(root, root, "check", tree=tree, nix=False)
+    assert verified.lookup(root, tree)["nix"] is False
+    verified.record(root, root, "verify", tree=tree, nix=True)
+    verified.record(root, root, "check", tree=tree, nix=False)
+    verified.record(root, root, "check", tree=tree)
+    assert verified.lookup(root, tree) == {**verified.lookup(root, tree), "kinds": ["check", "verify"], "nix": True}
+
+    repository = base / "stamps-cli"
+    subprocess.run(["git", "init", "-q", str(repository)], check=True)
+    (repository / "a.txt").write_text("a", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "add", "a.txt"], check=True)
+    cli = [sys.executable, str(SCRIPT.with_name("verified.py")), str(root), "record", str(repository)]
+    assert subprocess.run([*cli, "check"], capture_output=True).returncode == 0
+    stamped = verified.lookup(root, verified.working_tree(repository))
+    assert stamped["kinds"] == ["check"] and "nix" not in stamped, stamped
+    assert subprocess.run([*cli, "verify", "--nix"], capture_output=True).returncode == 0
+    assert verified.lookup(root, verified.working_tree(repository))["nix"] is True
+    assert subprocess.run([*cli, "verify", "--maybe"], capture_output=True).returncode == 2
+
 
 def check_stamp_ignores_cached_stats(base: Path) -> None:
     """A same-size edit in the clock tick of an index entry that Git did not smudge: Git itself rehashes it because
@@ -450,21 +628,60 @@ def check_session_start(base: Path) -> None:
         result = rule_hooks.session_start({}, root)
         return result["hookSpecificOutput"]["additionalContext"] if result else None
 
-    assert "grill-cc-bootstrap" in context("discovery") and "not set up yet" in context("discovery")
-    assert "grill-cc-bootstrap" in context("adapting") and "continue" in context("adapting")
-    assert context("ready") is None, "a ready CC starts like any session"
-    assert context(None) is None, "the template has no control-center.json and is never bootstrapped"
-    assert "Next step" not in context("adapting"), "no new repo: the plain continue offer"
+    real_resolve, real_run = hostos.resolve_exe, subprocess.run
+    hostos.resolve_exe = lambda name: None if name == "claude" else real_resolve(name)
+    try:
+        assert "grill-cc-bootstrap" in context("discovery") and "not set up yet" in context("discovery")
+        assert "grill-cc-bootstrap" in context("adapting") and "continue" in context("adapting")
+        assert context("ready") is None, "a ready CC starts like any session"
+        assert context(None) is None, "the template has no control-center.json and is never bootstrapped"
+        assert rule_hooks.session_start({}, base / "start" / "ready") is None, "no claude on PATH: nothing to say"
+    finally:
+        hostos.resolve_exe = real_resolve
 
-    # A new repo (./cc repo new) waits for its first feature: the session names that step and the open feature.
-    root = base / "start" / "adapting"
-    (root / "catalog" / "repositories").mkdir(parents=True)
-    (root / "catalog" / "repositories" / "app.json").write_text(json.dumps(
-        {"id": "app", "kind": "project", "remote": None, "status": "discovered"}), encoding="utf-8")
-    assert "first feature on the new repo(s) app" in context("adapting") and "Open features" not in context("adapting")
-    (root / "worktrees" / "start-app").mkdir(parents=True)
-    (root / "worktrees" / "start-app" / ".cc-worktree.json").write_text("{}", encoding="utf-8")
-    assert "Open features: start-app" in context("adapting"), context("adapting")
+    # Fail-closed hooks ("onFailure": "block") need Claude Code 2.1.295; an older one gets a warning.
+    def started(output: str | Exception, status: str = "ready") -> dict | None:
+        calls = []
+
+        def fake_run(argv: list[str], **options: object) -> subprocess.CompletedProcess:
+            calls.append((argv, options.get("timeout")))
+            if isinstance(output, Exception):
+                raise output
+            return subprocess.CompletedProcess(argv, 0, output, "")
+        hostos.resolve_exe = lambda name: "/opt/claude" if name == "claude" else real_resolve(name)
+        subprocess.run = fake_run  # type: ignore[assignment]
+        try:
+            result = rule_hooks.session_start({}, base / "start" / status)
+        finally:
+            hostos.resolve_exe, subprocess.run = real_resolve, real_run  # type: ignore[assignment]
+        assert calls == [(["/opt/claude", "--version"], 3)], calls
+        return result
+
+    for old in ("2.1.294 (Claude Code)", "2.0.999 (Claude Code)", "1.9.400"):
+        warning = (started(old) or {}).get("systemMessage", "")
+        assert "2.1.295 or later" in warning and "may not apply" in warning, (old, warning)
+    for new in ("2.1.295 (Claude Code)", "2.1.318 (Claude Code)", "2.2.0 (Claude Code)", "10.0.0", "", "garbage"):
+        assert started(new) is None, new
+    assert started(subprocess.TimeoutExpired("claude", 3)) is None, "a slow claude is skipped"
+    assert started(OSError("gone")) is None, "a claude that cannot start is skipped"
+    both = started("2.1.200 (Claude Code)", "discovery")
+    assert "systemMessage" in both and "grill-cc-bootstrap" in both["hookSpecificOutput"]["additionalContext"], both
+
+    hostos.resolve_exe = lambda name: None if name == "claude" else real_resolve(name)
+    try:
+        assert "Next step" not in context("adapting"), "no new repo: the plain continue offer"
+
+        # A new repo (./cc repo new) waits for its first feature: the session names that step and the open feature.
+        root = base / "start" / "adapting"
+        (root / "catalog" / "repositories").mkdir(parents=True)
+        (root / "catalog" / "repositories" / "app.json").write_text(json.dumps(
+            {"id": "app", "kind": "project", "remote": None, "status": "discovered"}), encoding="utf-8")
+        assert "first feature on the new repo(s) app" in context("adapting") and "Open features" not in context("adapting")
+        (root / "worktrees" / "start-app").mkdir(parents=True)
+        (root / "worktrees" / "start-app" / ".cc-worktree.json").write_text("{}", encoding="utf-8")
+        assert "Open features: start-app" in context("adapting"), context("adapting")
+    finally:
+        hostos.resolve_exe = real_resolve
 
 
 def check_protected_data(base: Path) -> None:
@@ -568,7 +785,11 @@ def main() -> int:
         check_edits(base / "cc")
         check_attributed_commits(base)
         check_verify_before_push(base)
+        check_nix_part_before_push(base)
+        check_stamp_nix_field(base)
         check_stamp_ignores_cached_stats(base)
+        check_post_read_is_cheap(base)
+        check_unusual_paths(base)
         check_isolation(base)
         check_reference_repos(base)
         check_kit_layer(base)

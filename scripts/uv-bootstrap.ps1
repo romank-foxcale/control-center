@@ -1,5 +1,5 @@
 # Download the uv release pinned in .uv-pin into .cc-local/tools/uv/<version>/ on Windows, after checking its SHA-256.
-# Run by cc.cmd and, in Git Bash, by cc when that uv is missing. Why: plans/active/native-core.md (W1, risk K13).
+# Run by cc.cmd and, in Git Bash, by cc when that uv is missing. Why: docs/kit/decisions/0033-native-core-nix-optional.md
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $pin = Get-Content -LiteralPath (Join-Path $root '.uv-pin') | Where-Object { $_ -and -not $_.StartsWith('#') }
