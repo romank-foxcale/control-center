@@ -29,7 +29,7 @@ def snapshot(root: Path) -> dict[str, str]:
 
 
 # gc belongs to the optional Nix extra, and Nix does not run on Windows; the fixture also needs symlinks, which
-# Windows allows only with Developer Mode. The only test skip on Windows outside the nix extra row (plan native-core).
+# Windows allows only with Developer Mode. The only test skip on Windows outside the nix extra row (docs/kit/decisions/0033-native-core-nix-optional.md).
 @unittest.skipIf(os.name == "nt", "./cc gc is part of the Nix extra, which does not run on Windows")
 class Gc(unittest.TestCase):
     def setUp(self) -> None:

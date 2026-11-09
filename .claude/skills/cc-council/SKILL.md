@@ -24,6 +24,7 @@ First read `../_shared/cc-cli.md` and follow it.
 ## Rules
 
 - The feature worktree must exist (`cc-worktree`) and be clean; the council refuses uncommitted changes. A plan work package makes the best task: pass it with `--task-file`.
+- A task longer than one line, or one with double quotes, goes in a file under `.cc-local/` passed with `--task-file <path>`: on Windows, cmd.exe cuts `--task` at a line break and PowerShell drops its double quotes.
 - Write the task as an outcome with constraints and acceptance, not as a design: the proposers design. The council never sees this conversation: put every fact it needs into the task (paths, error text, decisions already made), never "as discussed" or "the bug above".
 - For a debug council, describe the symptom exactly (input, expected, actual, platform, error text), never a suspected cause. The runner first runs verify and gives its output to the investigators; after approval the writer must produce a reproduction test that fails, and only then the fix. Stage `failed` with "does not reproduce the bug" means the chosen diagnosis was wrong; "fixes failed: question the design" means three fixes failed and the design needs a conversation, not a fourth attempt.
 - A run stops after the verdict. Show the user the verdict and the hidden proposal authors, and wait for an explicit decision; never approve on the user's behalf.

@@ -25,6 +25,7 @@ First read `../_shared/cc-cli.md` and follow it.
 ## Rules
 
 - The council never sees this conversation. Write the task as the change and its reason with every fact it needs: what is replaced by what, versions, where it runs, data volumes, constraints the user named, decisions already made. Do not list risks you expect: the assessors must find them independently.
+- A task longer than one line, or one with double quotes, goes in a file under `.cc-local/` passed with `--task-file <path>`: on Windows, cmd.exe cuts `--task` at a line break and PowerShell drops its double quotes.
 - Assessors read the CC's notes and the repositories in scope; both default assessors (Claude and GPT) can search the web for upstream issues. Name every repository the change touches with `--repo`.
 - Runs take minutes: run in the background and follow `./cc watch <run-id>`, relaying steps and stalls as `cc-council` describes.
 - The result is `risk.md` in the run folder `.cc-local/runs/<run-id>/`, with the judge's verdict on its first line. Give the user the verdict, the summary, the risks of severity 4 and 5 with their predicted errors, and the spikes, then the path to the full register. Say which assessment found what only if asked (`./cc council status <run-id>` shows the hidden authors).

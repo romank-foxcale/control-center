@@ -2,7 +2,7 @@
 """Run the literal rule-hook commands of .claude/settings.json the way Claude Code runs them, and check they deny.
 
 Claude Code runs a shell-form hook with `sh -c` on Linux and macOS and with Git Bash on Windows, where it sets
-CLAUDE_PROJECT_DIR as C:/... (plan native-core, spike S2). The PATH here has no Python, so the hook must reach
+CLAUDE_PROJECT_DIR as C:/... (docs/kit/decisions/0033-native-core-nix-optional.md). The PATH here has no Python, so the hook must reach
 its pinned Python through the cc shim and uv. Not a Nix check: it needs the shim's uv and Python in .cc-local
 (the first run downloads them if they are missing). Run: python -B scripts/hook_launch_test.py
 """

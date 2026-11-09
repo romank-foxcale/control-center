@@ -34,25 +34,27 @@ irm https://raw.githubusercontent.com/romank-foxcale/command-center/main/install
 
 What happens:
 
-1. If WSL (Linux on Windows, needed because Nix doesn't run on Windows) is missing, Windows asks for administrator rights in a second window and installs it.
+1. If Git for Windows is missing, it installs it with `winget`. Git Bash, which comes with it, runs the CC's rule hooks.
+2. It installs Claude Code with Anthropic's Windows installer.
+3. It puts the kit in `%USERPROFILE%\.cc-kit` and adds the `cc-kit` command to PowerShell and cmd.
+4. It asks for a name for your first Control Center, for example `shop`. It creates the CC in `%USERPROFILE%\Projects\shop_CC`, runs `.\cc.cmd doctor` there, which downloads the pinned uv and Python into `.cc-local` (about a minute), and opens Claude Code.
+
+No WSL and no Nix are needed; Windows may ask for administrator rights only to install Git. Want Codex or OpenCode too? Add `-Tools claude,codex,opencode` to the end of the second command.
+
+Do not put a CC inside a folder that OneDrive syncs (such as `Documents` or `Desktop` when OneDrive backup is on): the sync locks and replaces files under git. `cc.cmd doctor` warns about it.
+
+**Without the installer:** with [Git for Windows](https://git-scm.com/download/win) installed, clone a CC to a folder on `C:` and run `.\cc.cmd doctor` once in PowerShell from that folder before you open Claude Code there. Until that first run, the CC's rule hooks refuse every tool call with "run ./cc doctor once in a terminal": a hook never downloads, because the download takes longer than its timeout.
+
+### Windows with the Nix extra (WSL)
+
+Your project repos' build and test gates are Nix code today (until project adapters get a native backend, decision 0033). On a native Windows CC, `.\cc.cmd verify` reports each project gate as not run. To run them, install the optional Nix extra: add `-WithNix` to the end of the second command.
+
+1. If WSL (Linux on Windows; Nix doesn't run on Windows itself) is missing, Windows asks for administrator rights in a second window and installs it.
 2. Ubuntu asks you to create a **Linux username** (lowercase, no spaces) and **password**. The password stays invisible while you type. Then type `exit`.
 3. If Windows needs a restart, restart it. **The setup continues by itself** after you sign in.
 4. It installs the rest inside Ubuntu: Nix, the kit and Claude Code. When `sudo` asks for a password, it's your **Linux** password.
-5. It adds the `cc-kit` command to PowerShell and asks for a name for your first Control Center. Type one, for example `shop`, and the next step starts by itself.
-
-Want Codex or OpenCode too? Add `-Tools claude,codex,opencode` to the end of the second command.
 
 > With this setup your Control Centers live inside Linux, in `~/Projects`, never under `C:\`. Nix and git are very slow on the Windows drive, and a Claude Code rule hook there is slower than its timeout.
-
-### Windows without WSL
-
-The installer above sets up WSL and Nix, which your project repos' build and test gates need today. The CC itself does not need them. With only [Git for Windows](https://git-scm.com/download/win) installed, clone a CC to a folder on `C:` and run, in PowerShell from that folder:
-
-```powershell
-.\cc.cmd doctor
-```
-
-The first run downloads the pinned uv and Python into the CC's `.cc-local` folder, which takes a minute. Run it once before you open Claude Code there, so the first rule hook does not wait for that download. Every CC command and check then runs natively. `.\cc.cmd verify` reports each project gate as not run until Nix is available (decision 0033).
 
 ### macOS
 
@@ -104,20 +106,23 @@ The folder layout, which you never need to touch by hand:
 
 ### Claude Code desktop
 
-- **Windows:** in the Code tab, open the environment picker and choose **WSL → Ubuntu**. Then open the folder `\\wsl.localhost\Ubuntu\home\<your-linux-user>\Projects\my-project_CC`. The whole session (Claude, its tools, git) runs inside Ubuntu.
+- **Windows:** open the folder `%USERPROFILE%\Projects\my-project_CC`. The session runs natively, with the rule hooks in Git Bash.
+- **Windows with the Nix extra:** in the Code tab, open the environment picker and choose **WSL → Ubuntu**. Then open the folder `\\wsl.localhost\Ubuntu\home\<your-linux-user>\Projects\my-project_CC`. The whole session (Claude, its tools, git) runs inside Ubuntu.
   In WSL sessions the integrated terminal, file browser pane, connectors and `@` file suggestions aren't available yet. Use an Ubuntu terminal next to it for `./cc` commands.
 - **macOS:** open `~/Projects/my-project_CC`.
 
 ### VS Code + Claude Code extension, or VS Code + Codex extension
 
-- **Windows:** run `cc-kit open my-project code` (in PowerShell or Ubuntu). VS Code opens *connected to WSL* (bottom-left corner says `WSL: Ubuntu`).
+- **Windows:** run `cc-kit open my-project code`, or open the folder normally.
+- **Windows with the Nix extra:** run `cc-kit open my-project code` (in PowerShell or Ubuntu). VS Code opens *connected to WSL* (bottom-left corner says `WSL: Ubuntu`).
   Install the Claude Code and/or Codex extension **in that WSL window**; VS Code offers "Install in WSL: Ubuntu". Sign in with your own account.
   If Codex still runs on the Windows side, enable the setting `chatgpt.runCodexInWindowsSubsystemForLinux`.
 - **macOS:** `cc-kit open my-project code`, or open the folder normally.
 
 ### Cursor
 
-- **Windows:** run `cc-kit open my-project cursor` (in PowerShell or Ubuntu). The Cursor window must show `WSL: Ubuntu` in the bottom-left corner. If the new Agent window doesn't connect to WSL, use the classic editor window (`cursor --classic`).
+- **Windows:** run `cc-kit open my-project cursor`, or open the folder normally.
+- **Windows with the Nix extra:** run `cc-kit open my-project cursor` (in PowerShell or Ubuntu). The Cursor window must show `WSL: Ubuntu` in the bottom-left corner. If the new Agent window doesn't connect to WSL, use the classic editor window (`cursor --classic`).
 - **macOS:** open the folder normally.
 - Pick any model from Cursor's model picker; it's billed to your Cursor plan.
 
@@ -125,18 +130,19 @@ The folder layout, which you never need to touch by hand:
 
 Zed runs Claude Code or Codex in its Agent Panel through the Agent Client Protocol (ACP). They read the same instructions, skills and (Claude Code only) hooks as in a terminal, under your own Claude or ChatGPT login; Zed's own AI plan isn't needed. Start a thread with **Claude Agent** (Claude Code) or **Codex** from the panel's `+` menu, not with **Zed Agent**: it runs none of the CC's hooks.
 
-- **Windows:** in the command palette run `projects: open wsl`, choose **Ubuntu**, then open `~/Projects/my-project_CC`. To check the agent runs inside Ubuntu, run `uname` in Zed's terminal (`` Ctrl+` ``): it must answer `Linux`. A `PS ...\\wsl.localhost\...` prompt means the folder was opened as a Windows path (for example with *File → Open*): close it and open it again with `projects: open wsl`, later from the WSL entry in Recent Projects.
+- **Windows:** open the folder normally.
+- **Windows with the Nix extra:** in the command palette run `projects: open wsl`, choose **Ubuntu**, then open `~/Projects/my-project_CC`. To check the agent runs inside Ubuntu, run `uname` in Zed's terminal (`` Ctrl+` ``): it must answer `Linux`. A `PS ...\\wsl.localhost\...` prompt means the folder was opened as a Windows path (for example with *File → Open*): close it and open it again with `projects: open wsl`, later from the WSL entry in Recent Projects.
 - The agent starts in the project's first top-level folder, so the CC folder must be the only one in Zed's Project panel; opening `~/Projects` gives an agent without the CC's instructions, skills or hooks. A thread keeps the folder it started in: after reopening, start a new thread.
 - **macOS:** open the folder normally.
 
 ### Codex app or CLI
 
-- **App on Windows:** Settings → switch the agent to **WSL**, restart the app, then open `~/Projects/my-project_CC`.
-- **CLI (Windows in Ubuntu, or macOS):** `cd ~/Projects/my-project_CC && codex`. The first time, run `codex login` and sign in with your ChatGPT account.
+- **App on Windows:** open `%USERPROFILE%\Projects\my-project_CC`. With the Nix extra: Settings → switch the agent to **WSL**, restart the app, then open `~/Projects/my-project_CC`.
+- **CLI:** `cd` into the CC folder, then `codex` (with the Nix extra on Windows, in Ubuntu). The first time, run `codex login` and sign in with your ChatGPT account.
 
 ### OpenCode
 
-`cd ~/Projects/my-project_CC && opencode` (on Windows, in Ubuntu). Connect a provider with `/connect`.
+`cd` into the CC folder, then `opencode` (with the Nix extra on Windows, in Ubuntu). Connect a provider with `/connect`.
 
 ---
 
@@ -178,7 +184,7 @@ The agent turns it into an agreed plan with work packages and checks, saved in `
 
 **Always start coding with `./cc open my-feature`**, not by opening Claude Code or Codex inside `~/Projects/my-project_CC/worktrees/my-feature/<repo>_wt`. A session started inside a worktree doesn't get the CC's skills (`tdd`, `debug`, `lean-code`, …) or its rules, so it codes without them. `./cc open` starts the tool in the CC with the feature's worktrees added. If you do start a Claude session inside a worktree, it will tell you to restart.
 
-**On Windows:** a CC on the Windows drive runs natively. In PowerShell type `.\cc.cmd check`, in cmd `cc check`, in Git Bash `./cc check`. A CC inside Ubuntu is used from an Ubuntu terminal with `./cc`; use one side per CC folder.
+**On Windows:** a CC on the Windows drive runs natively. In PowerShell type `.\cc.cmd check`, in cmd `cc check`, in Git Bash `./cc check`. Text with line breaks or double quotes, such as a long council task, goes through Git Bash or a file (`--task-file`): cmd.exe and PowerShell change it on the way to `cc.cmd`. A CC inside Ubuntu is used from an Ubuntu terminal with `./cc`; use one side per CC folder.
 
 Other commands, run from the CC folder:
 
@@ -221,7 +227,7 @@ Link plans and features to Trello cards and update them when **you** ask; nothin
 
 ### Councils
 
-A council makes Claude and GPT work on the same task. It needs both CLIs installed and logged in inside Ubuntu (`claude auth login`, `codex login`); `./cc doctor` shows their state.
+A council makes Claude and GPT work on the same task. It needs both CLIs installed and logged in where the CC runs (`claude auth login`, `codex login`; inside Ubuntu for a CC in WSL); `./cc doctor` shows their state. On native Windows a Codex writer returns its change as a diff that the council applies, because Codex's Windows sandbox cannot yet write files without administrator setup (decision 0007).
 
 > Run a coding council on my-feature: <what you want>
 
@@ -279,13 +285,18 @@ This updates `~/.cc-kit` only. Existing CCs are separate repos and never change 
 
 | Symptom | Fix |
 |---|---|
-| `Python was not found` / Microsoft Store opens | You're in PowerShell or Git Bash, not Ubuntu. Run commands in Ubuntu. |
+| Claude Code refuses every tool call: "The CC is not set up on this machine yet" | The CC has no uv or Python yet, and a hook never downloads them. Run `./cc doctor` once in a terminal (PowerShell: `.\cc.cmd doctor`), then try again. |
+| Claude Code blocks every tool call after a change to `uv.lock`, `pyproject.toml`, `.uv-pin`, `cc`, `cc.cmd` or `scripts/hook_guard.py` | Every hook runs through these files, so a broken one blocks the agent too. In a terminal in the CC, run `git checkout -- uv.lock pyproject.toml .uv-pin cc cc.cmd scripts/hook_guard.py` (or `git stash`), then `./cc doctor`. |
+| `./cc doctor` says Claude Code is older than 2.1.295 | Run `claude update`. Older versions let a failing hook allow the call, so the CC's rules may not apply. |
+| `cc: an argument has a line break` | cmd.exe cuts text at a line break, and PowerShell drops double quotes inside text it passes to `cc.cmd`. Run `./cc` from Git Bash, or put the text in a file and pass it with `--task-file` (councils). |
+| `Could not start dynamically linked executable` (NixOS) | The CC downloads standard Linux builds of uv and Python. Enable `programs.nix-ld.enable = true;` in your NixOS configuration. |
+| `Python was not found` / Microsoft Store opens | You ran a script with a system Python. Run CC commands through `./cc` or `.\cc.cmd`, which bring their own Python. |
 | `cc-kit: command not found` | Open a new terminal (a new PowerShell window on Windows), or run `source ~/.bashrc` in Ubuntu. |
 | The installer stopped after a restart | Sign in again and wait a moment, or run the one-line installer again: it continues where it stopped. |
-| `$'\r': command not found` | The repo was cloned on the Windows side with Windows line endings. Clone it again from inside Ubuntu. |
+| `$'\r': command not found` (Nix extra) | The repo was cloned on the Windows side with Windows line endings. Clone it again from inside Ubuntu. |
 | `Nix is not installed` right after installing | Open a new terminal. |
 | `Nix flakes are disabled` | Re-run `~/.cc-kit/install/install.sh`. |
-| Everything is very slow | Your CC is under `/mnt/c`. Move it to `~/Projects`. |
+| Everything is very slow | In WSL: your CC is under `/mnt/c`; move it to `~/Projects`. On Windows: the CC is inside a OneDrive folder (`./cc doctor` warns); move it out. |
 | Nix can't see a new file | Nix only sees files git knows about: `git add <file>`. |
 | WSL uses a lot of disk space | Run `./cc doctor --disk`, then `./cc gc`. Windows still shows the old size, because the WSL disk file does not shrink by itself: run `./cc backup` and check that `./cc backup where` exits 0, close every WSL window, run `wsl --shutdown`, then compact the file with `diskpart` (`select vdisk file=...`, `attach vdisk readonly`, `compact vdisk`, `detach vdisk`) in an administrator PowerShell. |
 | Installer stops after "enabling systemd" | Run `wsl --shutdown` in PowerShell, then run the installer again. |

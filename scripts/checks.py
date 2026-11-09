@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The native check runner behind ./cc check, on Windows, macOS and Linux without Nix (plan native-core, W2).
+"""The native check runner behind ./cc check, on Windows, macOS and Linux without Nix (docs/kit/decisions/0033-native-core-nix-optional.md).
 
 The registry holds the same check groups and scripts as the checks.* outputs of flake.nix, plus `core` for the CLI
 itself; checks_test.py fails when the two drift apart. Every group runs its scripts in order with this interpreter,
