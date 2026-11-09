@@ -42,7 +42,7 @@ Several CCs sat in one parent folder and shared `../repos/`. Asked for "new PRs"
 
 ## Consequences
 
-- `./cc prs` needs an authenticated `gh` in the environment `./cc` runs in (WSL on Windows).
+- `./cc prs` needs an authenticated `gh` in the environment `./cc` runs in: Windows for a CC on the Windows drive, Ubuntu for a CC inside WSL.
 - `remove` keeps the base clone and any Nix adapter: `./cc repo strays` then reports the clone until it is deleted, and adapter removal is a deliberate Nix change.
 
 ## Revisit when

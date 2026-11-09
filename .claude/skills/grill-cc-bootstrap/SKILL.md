@@ -57,7 +57,7 @@ Always ask, never infer: "Which platforms does `<repo>` ship on: windows, linux,
 
 A target the user names but nobody can gate yet stays in `targets`; mark the repo `blocked` with that reason instead of dropping the target.
 
-Every gate above is Nix-defined until project adapters get a native backend (docs/kit/decisions/0033-native-core-nix-optional.md). The CC itself runs without Nix, but `./cc verify` runs a project gate only where the optional Nix extra is installed: Linux, macOS, or WSL on Windows. Tell the user this in plain words when their machine has no Nix, and never install it for them.
+Every gate above is Nix-defined until project adapters get a native backend (docs/kit/decisions/0033-native-core-nix-optional.md). The CC itself runs without Nix, but `./cc verify` runs a project gate only when Nix runs where the CC runs: `nix` on the PATH of the shell that runs `./cc`. On Windows that means a CC inside WSL (`~/...`, used with `./cc` from an Ubuntu terminal); a CC on the Windows drive, used with `cc.cmd` or Git Bash, has no Nix even when WSL has it. Check with `./cc doctor` in the CC, not by looking for Nix elsewhere. Tell the user this in plain words when the CC has no Nix, and never install it for them.
 
 ### Stack, static checks and quality gate
 

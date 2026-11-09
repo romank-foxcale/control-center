@@ -60,7 +60,7 @@ A spike (2026-11-07) showed that the CC's own code is Python and Git, which uv r
 
 ## Consequences
 
-- In milestone 1 the project gates are still Nix-defined. A CC with catalog repos needs the Nix extra (Linux, macOS, or WSL on Windows) for `./cc verify` to pass; without it verify fails honestly. Milestone 2 gives adapters a native backend.
+- In milestone 1 the project gates are still Nix-defined. A CC with catalog repos needs the Nix extra where the CC runs (Linux, macOS, or a CC inside WSL on Windows; a CC on the Windows drive does not use the Nix in WSL) for `./cc verify` to pass; without it verify fails honestly. Milestone 2 gives adapters a native backend.
 - The Windows installer (`install/windows/install.ps1`) sets up the native core by default: Git for Windows, the AI tools, the kit, a `cc-kit` command and a first CC, with no WSL and no Nix. `-WithNix` installs the WSL and Nix extra instead. A clone plus `cc.cmd` or `./cc` is also enough for the core.
 - A stamp records whether the Nix part ran (`nix` in `.cc-local/verified/<tree>`); a push of commits that change Nix inputs asks when it did not ([0013](0013-rule-hooks.md)).
 - `./cc doctor` exits 1 when it reports an error, such as a Claude Code below 2.1.295 or a missing Git Bash, and warns when the CC is inside OneDrive, whose sync locks and replaces files under git and the venv.
