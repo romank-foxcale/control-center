@@ -244,6 +244,28 @@ def only_copy_warning(root: Path, identifier: str) -> str:
             f"./cc repo set-remote {identifier} <url>")
 
 
+def attention(root: Path, nix_found: bool) -> list[str]:
+    """What ./cc doctor and ./cc verify point out about the catalog: each repo with no remote is the only copy of its
+    history (R1), and a blocked repo may be gated on a host that has Nix, so blocked never reads as tested (R5)."""
+    lines = []
+    for path in sorted((root / "catalog" / "repositories").glob("*.json")):
+        data = load_json(path)
+        identifier = str(data.get("id", path.stem))
+        if data.get("kind", "project") != "project":
+            continue
+        if data.get("remote", "") is None and is_git_checkout(base_clone(root, identifier, "project")):
+            lines.append(only_copy_warning(root, identifier))
+        if data.get("status") == "blocked" and nix_found:
+            lines.append(f"note: {identifier} is blocked ({data.get('blockedReason', 'no reason given')}), but this host "
+                         f"has Nix: if its adapter declares gates, run ./cc verify {identifier} and set it verified")
+    return lines
+
+
+def command_attention(root: Path, _: argparse.Namespace) -> None:
+    for line in attention(root, hostos.resolve_exe("nix") is not None):
+        print(line)
+
+
 def git_identity_missing(root: Path) -> list[str]:
     """What git lacks to make the first commit: user.name and user.email, from the environment or the config."""
     missing = []
@@ -625,6 +647,8 @@ def parser() -> argparse.ArgumentParser:
     kind.set_defaults(handler=command_kind)
     strays = subparsers.add_parser("strays", help="fail when repos/ holds a clone the catalog does not list")
     strays.set_defaults(handler=command_strays)
+    attention_parser = subparsers.add_parser("attention", help="repos with no remote and blocked repos worth a look")
+    attention_parser.set_defaults(handler=command_attention)
     update = subparsers.add_parser("update", help="fetch base clones; fast-forward reference clones, keeping them read-only")
     update.add_argument("ids", nargs="*")
     update.set_defaults(handler=command_update)

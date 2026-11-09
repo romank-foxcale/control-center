@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -161,8 +162,11 @@ def doctor(arguments: list[str]) -> int:
     if os.name == "nt" and not git_bash(git):
         print("error: Git for Windows (Git Bash) is missing; the rule hooks need it")
     found = shutil.which("nix")
-    print(subprocess.run([found, "--version"], capture_output=True, text=True).stdout.strip() if found
-          else "note: Nix is absent; the optional Nix extra (build, run, relock, gc, Nix gates) is unavailable")
+    version = subprocess.run([found, "--version"], capture_output=True, text=True).stdout.strip() if found else ""
+    print(version or "note: Nix is absent; the optional Nix extra (build, run, relock, gc, Nix gates) is unavailable")
+    if old_nix(version):
+        print(f"warning: {version} is older than {'.'.join(map(str, MINIMUM_NIX))}, the oldest Nix tested with the "
+              "placeholder input of a repo with no remote (docs/kit/decisions/0034-new-project-cc.md); update Nix")
     if docker := shutil.which("docker") or shutil.which("podman"):
         print(subprocess.run([docker, "--version"], capture_output=True, text=True).stdout.strip())
     else:
@@ -174,7 +178,18 @@ def doctor(arguments: list[str]) -> int:
         print("note: gh is missing or not logged in; ./cc prs will be unavailable")
     script("council/providers.py", "status", root=False)
     script("repositories.py", "strays")
+    if (ROOT / "control-center.json").is_file():
+        script("repositories.py", "attention")
     return 0
+
+
+MINIMUM_NIX = (2, 28)
+
+
+def old_nix(version: str) -> bool:
+    """Whether `nix --version` output names a Nix older than MINIMUM_NIX; False when it names none."""
+    match = re.search(r"(\d+)\.(\d+)", version)
+    return bool(match) and (int(match.group(1)), int(match.group(2))) < MINIMUM_NIX
 
 
 def check(arguments: list[str]) -> int:

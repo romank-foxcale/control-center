@@ -205,6 +205,9 @@ def run_verify(root: Path, args: argparse.Namespace, live: Gates) -> int:
     print("\nREPO\tGATE\tRESULT")
     for row in results:
         print("\t".join(row))
+    if (root / "control-center.json").is_file():
+        for line in repositories_catalog.attention(root, nix_found):
+            print(line)
     if not all(result in {"pass", WARN} for _, _, result in results):
         return 1
     stamp_trees(root, started)

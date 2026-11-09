@@ -126,10 +126,18 @@ def check_new_repo(base: Path, root: Path) -> None:
     assert repo("new", "used", "--targets", "linux", "--stack", "python", check=False).returncode != 0, "folder not empty"
     assert "none (local)" in repo("list").stdout
     assert "no remote yet" in repo("update", "app").stdout
+    sys.path.insert(0, str(SCRIPTS))
+    import repositories
+
+    noted = repositories.attention(root, nix_found=False)
+    assert len(noted) == 1 and "app has no remote" in noted[0], noted
 
     assert repo("set-status", "app", "blocked", check=False).returncode != 0, "blocked needs a reason"
     repo("set-status", "app", "blocked", "--reason", "no native gate yet")
     assert json.loads((root / "catalog/repositories/app.json").read_text())["blockedReason"] == "no native gate yet"
+    assert not any("blocked" in line for line in repositories.attention(root, nix_found=False))
+    assert any("app is blocked (no native gate yet), but this host has Nix" in line
+               for line in repositories.attention(root, nix_found=True)), "blocked never hides a host that can gate it"
     repo("set-status", "app", "discovered")
     assert "blockedReason" not in json.loads((root / "catalog/repositories/app.json").read_text())
     assert repo("set-branch", "app", "develop", check=False).returncode != 0, "set-branch checks local branches"
