@@ -656,7 +656,31 @@ def session_start(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | 
         return None  # the template itself, or a broken file that ./cc check reports
     if status not in SETUP_CONTEXT:
         return None
-    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": SETUP_CONTEXT[status]}}
+    context = SETUP_CONTEXT[status]
+    if status == "adapting":
+        context += setup_next_step(root)
+    return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}
+
+
+def setup_next_step(root: Path) -> str:
+    """While a new repo waits for its first feature (docs/kit/decisions/0034-new-project-cc.md), the setup is not stuck:
+    the next step is that feature, so the session does not push the interview on someone who is building it."""
+    waiting = []
+    for path in sorted((root / "catalog" / "repositories").glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if data.get("kind", "project") == "project" and data.get("remote", "") is None and data.get("status") == "discovered":
+            waiting.append(str(data.get("id", path.stem)))
+    if not waiting:
+        return ""
+    features = sorted(path.parent.name for path in (root / "worktrees").glob("*/.cc-worktree.json"))
+    step = (f" Next step: the first feature on the new repo(s) {', '.join(waiting)} adds the code, the adapter and a gate per "
+            f"target; then ./cc verify, or set-status blocked --reason where no gate can run on this host.")
+    if features:
+        step += f" Open features: {', '.join(features)}; if the user works on one, help with it instead of the interview."
+    return step
 
 
 HANDLERS = {"pre-bash": pre_bash, "pre-read": pre_read, "post-read": post_read, "pre-edit": pre_edit, "post-edit": post_edit,

@@ -16,6 +16,7 @@ relations:
   - docs/kit/index.md
   - docs/kit/decisions/0003-template-as-seed.md
   - docs/kit/decisions/0013-rule-hooks.md
+  - docs/kit/decisions/0034-new-project-cc.md
 ---
 
 # A CC that is not set up starts its own setup; nobody needs a magic prompt

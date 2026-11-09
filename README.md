@@ -1,6 +1,6 @@
 # Control Center Kit
 
-A **Control Center (CC)** is a folder that teaches AI coding agents (Claude Code, Codex, Cursor, OpenCode) how your system fits together:
+A **Control Center (CC)** is a folder that teaches AI coding agents (Claude Code, Codex, Cursor, OpenCode) how your system fits together. Use it for one new project that has no code yet, or for many repos that you already have:
 
 - which repos belong to it,
 - how each one is built and tested,
@@ -32,7 +32,7 @@ The installers also set up Nix (on Windows inside WSL): the optional extra that 
 
 **2. Name your first Control Center.** The installer asks for a name at the end. Use the product or system it covers, for example `shop`.
 
-**3. Answer the agent's questions.** Claude opens and interviews you: which repos, how they relate, which platforms they ship on. It reads the code first, so it only asks what it can't find out. It then connects each repo and proves it builds and passes its tests.
+**3. Answer the agent's questions.** Claude opens and interviews you. First: do you have repos already, or do you start a new project? Then: which repos, how they relate, which platforms they ship on. For an existing repo it reads the code first, so it only asks what it can't find out, then connects the repo and proves it builds and passes its tests. For a new project it creates the empty repo on your computer; you can add a GitHub (or other) remote later.
 
 That's it. You need a Claude subscription (Pro, Max, Team or Enterprise). Other tools work too: see [GUIDE.md](GUIDE.md).
 
@@ -43,6 +43,7 @@ Open your CC with `cc-kit open shop`, or open the folder in your AI tool. Then j
 | Say | What happens |
 |---|---|
 | "add github.com/acme/api" | Connects the repo: clones it, sets up its build and tests, verifies them |
+| "start a new repo called api" | Creates an empty repo on your computer, ready for its first feature; a remote can come later |
 | "plan this: …" | Interviews you and writes an agreed plan before any code changes |
 | "start a feature for …" | Creates a separate working copy of the affected repos for the task |
 | "fix this bug: …" | Finds the root cause first, adds a failing test, then fixes it |
