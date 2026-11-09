@@ -115,10 +115,17 @@ def validate_repository(
         errors.append(f"{relative}: schemaVersion must be 1")
     if data.get("status") not in REPOSITORY_STATUSES:
         errors.append(f"{relative}: unsupported status '{data.get('status')}'")
-    for field in ("remote", "defaultBranch", "role", "sourceInput", "adapter"):
+    for field in ("defaultBranch", "role", "sourceInput", "adapter"):
         if not isinstance(data.get(field), str) or not data[field]:
             errors.append(f"{relative}: '{field}' must be a non-empty string")
     remote = data.get("remote")
+    # null: a project repo made with ./cc repo new that has no remote yet (docs/kit/decisions/0034-new-project-cc.md).
+    if not (isinstance(remote, str) and remote) and not ("remote" in data and remote is None
+                                                          and data.get("kind", "project") == "project"):
+        errors.append(f"{relative}: 'remote' must be a non-empty string, or null for a project repo with no remote yet")
+    reason = data.get("blockedReason")
+    if "blockedReason" in data and not (isinstance(reason, str) and reason.strip()):
+        errors.append(f"{relative}: 'blockedReason' must be a non-empty string")
     if isinstance(remote, str) and Path(remote).is_absolute():
         errors.append(f"{relative}: remote must not be an absolute local path")
     adapter = data.get("adapter")
@@ -494,12 +501,19 @@ def validate(root: Path, adapter_targets: dict[str, Any] | None = None) -> list[
     validate_shim_mode(root, errors)
 
     if status == "ready":
-        if not repositories:
-            errors.append("control-center.json: ready CC must contain at least one repository")
-        for path in repositories:
-            data = load_json(path, errors)
-            if data and data.get("kind", "project") == "project" and data.get("status") != "verified":
-                errors.append(f"{path.relative_to(root)}: ready CC requires status 'verified'")
+        # Every project repo is verified, or blocked with a written reason; reference repos alone are not a project.
+        projects = [(path, data) for path in repositories
+                    if (data := load_json(path, errors)) and data.get("kind", "project") == "project"]
+        if not projects:
+            errors.append("control-center.json: ready CC must contain at least one project repository")
+        for path, data in projects:
+            if data.get("status") == "blocked" and isinstance(data.get("blockedReason"), str) and data["blockedReason"].strip():
+                continue
+            if data.get("status") == "blocked":
+                errors.append(f"{path.relative_to(root)}: ready CC needs a blockedReason for a blocked repo; "
+                              f"run ./cc repo set-status {data.get('id')} blocked --reason \"<why>\"")
+            elif data.get("status") != "verified":
+                errors.append(f"{path.relative_to(root)}: ready CC requires status 'verified', or 'blocked' with a reason")
     return errors
 
 

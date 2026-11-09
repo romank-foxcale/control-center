@@ -33,6 +33,7 @@ relations:
   - docs/kit/decisions/0030-disk-management.md
   - docs/kit/decisions/0032-code-center-keeps-nix-behind-the-center-contract.md
   - docs/kit/decisions/0033-native-core-nix-optional.md
+  - docs/kit/decisions/0034-new-project-cc.md
 ---
 
 # Kit knowledge map
@@ -88,3 +89,4 @@ This folder belongs to the kit. A CC never edits it: to change kit behaviour for
 - [A CC shows where its disk space goes and frees Nix space without touching CC state](decisions/0030-disk-management.md)
 - [code-center keeps Nix inside, in WSL, and joins the control-center hub only through the center contract](decisions/0032-code-center-keeps-nix-behind-the-center-contract.md) (superseded by 0033)
 - [The CC core runs natively through uv on Windows, macOS and Linux; Nix is an optional extra](decisions/0033-native-core-nix-optional.md)
+- [A CC can start a new project whose repos do not exist yet](decisions/0034-new-project-cc.md)

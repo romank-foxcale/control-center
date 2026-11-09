@@ -53,7 +53,7 @@ class Surface(unittest.TestCase):
         with mock.patch.object(cc, "script", return_value=0), mock.patch.object(cc, "nix", return_value=0), \
                 mock.patch.object(cc, "require_nix", return_value="nix"), mock.patch.object(cc, "lock_flake"), \
                 mock.patch.object(cc, "doctor", return_value=0), mock.patch.object(cc, "check", return_value=0), \
-                mock.patch.object(cc, "feature_overrides", return_value=[]):
+                mock.patch.object(cc, "source_overrides", return_value=[]):
             for command in COMMANDS:
                 code, _, err = run(command, "validate" if command == "bootstrap" else "x", "show")
                 self.assertNotIn("unknown command", err, command)
@@ -126,6 +126,13 @@ class Doctor(unittest.TestCase):
             self.assertFalse(cc.wsl_on_windows_drive(Path("/home/me/cc")))
         with mock.patch.object(cc.sys, "platform", "linux"), mock.patch.object(cc.platform, "release", return_value="6.8.0-45-generic"):
             self.assertFalse(cc.wsl_on_windows_drive(Path("/mnt/c/Users/me/cc")))
+
+    def test_a_nix_older_than_the_tested_minimum_is_flagged(self) -> None:
+        # 2.28 is the oldest Nix the placeholder input of a repo with no remote was tested on.
+        self.assertTrue(cc.old_nix("nix (Nix) 2.27.1"))
+        self.assertFalse(cc.old_nix("nix (Nix) 2.28.8"))
+        self.assertFalse(cc.old_nix("nix (Nix) 2.35.2"))
+        self.assertFalse(cc.old_nix(""))
 
     def test_uv_is_found(self) -> None:
         self.assertIsNotNone(cc.uv_binary(), "the shim ran this test through uv")
