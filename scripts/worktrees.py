@@ -270,7 +270,63 @@ def unpublished_commits(worktree: Path, entry: dict[str, Any]) -> int:
     )
     if upstream.returncode == 0:
         return int(git(worktree, "rev-list", "--count", "@{upstream}..HEAD"))
+    # Commits already in the branch the feature started from are published: ./cc worktree land put them there in a
+    # repo with no remote, or a PR merged them (docs/kit/decisions/0031-new-project-cc.md).
+    if is_ancestor(worktree, "HEAD", entry.get("baseRef", "")):
+        return 0
     return int(git(worktree, "rev-list", "--count", f"{entry['baseHead']}..HEAD"))
+
+
+def is_ancestor(repository: Path, commit: str, other: str) -> bool:
+    return bool(other) and subprocess.run(
+        ["git", "-C", str(repository), "merge-base", "--is-ancestor", commit, other], capture_output=True).returncode == 0
+
+
+def command_land(root: Path, args: argparse.Namespace) -> None:
+    """./cc worktree land <feature> <repo>: bring a finished feature into the base clone of a repo with no remote yet.
+
+    Fast-forward only, so the base gets exactly the tree the feature's verify tested (a merge commit would be a tree
+    no gate ran) and a conflict can never leave the base clone mid-merge. Needs a passing ./cc feature <feature> verify
+    for that tree, or --unverified "<reason>" from the user. Why: docs/kit/decisions/0031-new-project-cc.md."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import verified
+
+    context = Context(root, args.feature)
+    manifest = context.load_manifest()
+    entry = manifest.get("repositories", {}).get(args.repository)
+    if entry is None:
+        raise ValueError(f"repository does not belong to feature: {args.repository}")
+    descriptor = repository(context.root, args.repository)
+    if descriptor.get("remote") is not None:
+        raise ValueError(f"{args.repository} has a remote: push the branch {entry['branch']} and open a pull request")
+    worktree = context.resolve_project_path(entry["worktree"])
+    base = context.resolve_project_path(entry["base"])
+    default = str(descriptor["defaultBranch"])
+    if git(worktree, "status", "--porcelain"):
+        raise ValueError(f"worktree is dirty: {worktree}; commit or discard the changes first")
+    if git(base, "status", "--porcelain"):
+        raise ValueError(f"the base clone has uncommitted changes: {base}")
+    if git(base, "branch", "--show-current") != default:
+        raise ValueError(f"the base clone {base} is not on {default}")
+    head = git(worktree, "rev-parse", "HEAD")
+    if is_ancestor(worktree, head, f"refs/heads/{default}"):
+        print(f"{args.repository}: {entry['branch']} is already in {default}")
+        return
+    if not is_ancestor(worktree, f"refs/heads/{default}", head):
+        raise ValueError(f"{default} moved since {entry['branch']} started: merge or rebase {default} in {worktree}, "
+                         f"run ./cc feature {args.feature} verify again, then land")
+    stamp = verified.lookup(context.root, verified.commit_tree(worktree, head)) or {}
+    passed = "verify" in stamp.get("kinds", [])
+    reason = (args.unverified or "").strip()
+    if not passed and not reason:
+        raise ValueError(f"no passing ./cc feature {args.feature} verify is recorded for this tree; run it, or, if no "
+                         "gate can run it, land with --unverified \"<reason>\" after the user agrees")
+    git(base, "merge", "--ff-only", "--quiet", head)
+    if not passed:
+        entry["landedUnverified"] = reason
+        write_json(context.manifest_path, manifest)
+    print(f"{args.repository}: {default} fast-forwarded to {head[:12]}" +
+          ("" if passed else f", NOT verified: {reason}"))
 
 
 def ensure_removable(worktree: Path, entry: dict[str, Any]) -> None:
@@ -349,16 +405,36 @@ def command_status(root: Path, args: argparse.Namespace) -> None:
         print(f"{identifier}\t{branch}\t{head}\t{dirty}\t{unpublished}\t{worktree}")
 
 
+def source_overrides(root: Path, feature: str | None = None) -> list[str]:
+    """The --override-input arguments of every Nix call ./cc makes, in one place.
+
+    A project repo with no remote yet (./cc repo new) has a tracked placeholder as its flake input; its base clone
+    replaces it. A feature's worktrees then replace their repos' inputs, so the feature wins over the base clone.
+    Why: docs/kit/decisions/0031-new-project-cc.md."""
+    root = root.resolve()
+    inputs: dict[str, str] = {}
+    manifest_path = root / "control-center.json"
+    if manifest_path.is_file():
+        repositories_root = (root / load_json(manifest_path)["layout"]["repositories"]).resolve()
+        for path in sorted((root / "catalog" / "repositories").glob("*.json")):
+            data = load_json(path)
+            if data.get("remote", "") is None and data.get("kind", "project") == "project":
+                clone = repositories_root / "project" / str(data.get("checkout", path.stem))
+                if clone.is_dir():
+                    inputs[str(data.get("sourceInput", path.stem))] = f"path:{clone}"
+    if feature:
+        context = Context(root, feature)
+        for entry in context.load_manifest().get("repositories", {}).values():
+            worktree = context.resolve_project_path(entry["worktree"])
+            if not worktree.is_dir():
+                raise ValueError(f"worktree is missing: {worktree}")
+            inputs[entry["sourceInput"]] = f"path:{worktree}"
+    return [argument for name, source in inputs.items() for argument in ("--override-input", name, source)]
+
+
 def command_nix_args(root: Path, args: argparse.Namespace) -> None:
-    context = Context(root, args.feature)
-    manifest = context.load_manifest()
-    for entry in manifest.get("repositories", {}).values():
-        worktree = context.resolve_project_path(entry["worktree"])
-        if not worktree.is_dir():
-            raise ValueError(f"worktree is missing: {worktree}")
-        print("--override-input")
-        print(entry["sourceInput"])
-        print(f"path:{worktree}")
+    for argument in source_overrides(root, args.feature):
+        print(argument)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -385,6 +461,12 @@ def parser() -> argparse.ArgumentParser:
     remove.add_argument("repositories", nargs="*")
     remove.set_defaults(handler=command_remove)
 
+    land = subparsers.add_parser("land", help="fast-forward the base clone of a repo with no remote to the feature branch")
+    land.add_argument("feature")
+    land.add_argument("repository")
+    land.add_argument("--unverified", metavar="REASON", help="land without a passing verify; the user's reason is kept")
+    land.set_defaults(handler=command_land)
+
     status = subparsers.add_parser("status")
     status.add_argument("feature")
     status.set_defaults(handler=command_status)
@@ -396,7 +478,7 @@ def parser() -> argparse.ArgumentParser:
     open_.set_defaults(handler=command_open)
 
     nix_args = subparsers.add_parser("nix-args")
-    nix_args.add_argument("feature")
+    nix_args.add_argument("feature", nargs="?", help="also override the inputs of this feature's worktrees")
     nix_args.set_defaults(handler=command_nix_args)
     return result
 

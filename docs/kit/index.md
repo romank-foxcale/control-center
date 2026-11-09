@@ -31,6 +31,7 @@ relations:
   - docs/kit/decisions/0028-verify-before-push.md
   - docs/kit/decisions/0029-risk-council.md
   - docs/kit/decisions/0030-disk-management.md
+  - docs/kit/decisions/0031-new-project-cc.md
 ---
 
 # Kit knowledge map
@@ -84,3 +85,4 @@ This folder belongs to the kit. A CC never edits it: to change kit behaviour for
 - [Push only the tree a passing run tested, and run the change itself before calling it done](decisions/0028-verify-before-push.md)
 - [A change to architecture, dependencies, runtime, data or deployment gets a risk council before it is planned](decisions/0029-risk-council.md)
 - [A CC shows where its disk space goes and frees Nix space without touching CC state](decisions/0030-disk-management.md)
+- [A CC can start a new project whose repos do not exist yet](decisions/0031-new-project-cc.md)

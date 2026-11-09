@@ -325,6 +325,18 @@ def check_session_start(base: Path) -> None:
     assert context("ready") is None, "a ready CC starts like any session"
     assert context(None) is None, "the template has no control-center.json and is never bootstrapped"
 
+    assert "Next step" not in context("adapting"), "no new repo: the plain continue offer"
+
+    # A new repo (./cc repo new) waits for its first feature: the session names that step and the open feature.
+    root = base / "start" / "adapting"
+    (root / "catalog" / "repositories").mkdir(parents=True)
+    (root / "catalog" / "repositories" / "app.json").write_text(json.dumps(
+        {"id": "app", "kind": "project", "remote": None, "status": "discovered"}), encoding="utf-8")
+    assert "first feature on the new repo(s) app" in context("adapting") and "Open features" not in context("adapting")
+    (root / "worktrees" / "start-app").mkdir(parents=True)
+    (root / "worktrees" / "start-app" / ".cc-worktree.json").write_text("{}", encoding="utf-8")
+    assert "Open features: start-app" in context("adapting"), context("adapting")
+
 
 def check_protected_data(base: Path) -> None:
     """Irreplaceable data and its mirrors: an agent's delete, move-away or overwrite is denied in Bash and PowerShell

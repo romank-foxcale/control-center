@@ -1,6 +1,6 @@
 # Control Center: setup and usage guide
 
-A **Control Center (CC)** is a git repo that sits next to your project repos and teaches AI coding agents how the whole system fits together:
+A **Control Center (CC)** is a git repo that holds your project repos, the ones you already have or the new ones it creates for you, and teaches AI coding agents how the whole system fits together. Use it for one new project or for many existing repos:
 
 - **how to build, test and run things**: as Nix code, which fails loudly when something drifts;
 - **why things are the way they are**: short, linked Markdown notes in `docs/`;
@@ -132,7 +132,7 @@ Zed runs Claude Code or Codex in its Agent Panel through the Agent Client Protoc
 
 ## 4. First session: the setup interview
 
-The agent asks about your repos: where they are, how they depend on each other, and **which platforms each one ships on** (Windows, Linux, macOS). It reads the code and CI first and asks only what it can't work out itself. You never need to write Nix or know how the CC works inside. Then it connects the repos one at a time:
+The agent first asks whether you have repos already, start a new project, or both. For existing repos it asks where they are, how they depend on each other, and **which platforms each one ships on** (Windows, Linux, macOS). It reads the code and CI first and asks only what it can't work out itself. You never need to write Nix or know how the CC works inside. Then it connects the repos one at a time:
 
 1. registers and clones the repo (`./cc repo add`),
 2. writes the build and test definition for it, including a check for each platform it ships on,
@@ -140,7 +140,9 @@ The agent asks about your repos: where they are, how they depend on each other, 
 
 Expect several rounds of questions. When it's done, `cc-kit list` shows the CC as `ready`. Commit it and push it to your own remote. The agent can do that too if you ask.
 
-**Adding a repo later:** say "add `<link to the repo>`". The agent connects it the same way, not just as a list entry.
+**Starting a new project:** the agent asks for each new repo's name, languages and platforms, and creates it empty on your computer (`./cc repo new`). It has no remote yet, so it is the only copy: the agent offers a backup folder. Your first feature adds the code and its build and test definition; until then the setup stays open. While the repo has no remote, a finished feature goes into it with `./cc worktree land`. To publish it, create an **empty** repository on GitHub (no README) and say "set the remote of `<repo>` to `<link>`". If you want the CC `ready` before the first feature, the agent marks the repo blocked with a reason such as "no code yet".
+
+**Adding a repo later:** say "add `<link to the repo>`", or "start a new repo called `<name>`". The agent connects it the same way, not just as a list entry.
 
 If the interview doesn't start (for example in a tool that ignores `AGENTS.md`), say "Set up this Control Center", or call the skill directly: `/grill-cc-bootstrap` in Claude Code and Cursor, `$grill-cc-bootstrap` in Codex.
 

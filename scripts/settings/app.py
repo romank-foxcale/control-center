@@ -276,7 +276,7 @@ class Settings(App):
             "councils",
             [(c["id"], c["kind"], c["proposers"], c["judge"], c["writer"], "on" if c["approval"] else "off", str(c["maxRetries"])) for c in state.councils],
         )
-        self.fill("repos", [(r["id"], r["kind"], r["branch"], self.paint(r["status"]), r["targets"], r["stack"], r["remote"]) for r in state.repos])
+        self.fill("repos", [(r["id"], r["kind"], r["branch"], self.paint(r["status"]), r["targets"], r["stack"], r["remote"] or "none (local)") for r in state.repos])
         self.fill("trello", list(state.trello.items()))
 
     @staticmethod
@@ -389,7 +389,7 @@ class Settings(App):
 
         self.push_screen(ChoicePicker(f"Change {item}", [
             ("branch", f"main branch · {repo['branch']}"),
-            ("remote", f"link · {repo['remote']}"),
+            ("remote", f"link · {repo['remote'] or 'none (local)'}"),
             ("targets", f"target platforms · {repo['targets']}"),
             ("stack", f"stack · {repo['stack']}"),
             ("kind", f"kind · {repo['kind']}"),
@@ -489,7 +489,7 @@ def show(state: Snapshot) -> str:
         *(f"  {name:<15} {value}" for name, value in state.trello.items()),
         "",
         "REPOS (repo · kind · main branch · status · targets · stack · remote)",
-        *(f"  {r['id']:<20} {r['kind']:<9} {r['branch']:<10} {r['status']:<11} {r['targets']:<15} {r['stack']:<12} {r['remote']}"
+        *(f"  {r['id']:<20} {r['kind']:<9} {r['branch']:<10} {r['status']:<11} {r['targets']:<15} {r['stack']:<12} {r['remote'] or 'none (local)'}"
           for r in state.repos),
     ]
     return "\n".join(lines)

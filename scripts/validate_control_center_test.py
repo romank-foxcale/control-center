@@ -5,6 +5,8 @@ passes, so older CCs keep passing ./cc check; each wrong shape gives exactly the
 from __future__ import annotations
 
 import importlib.util
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -109,6 +111,63 @@ class DiskKeys(unittest.TestCase):
         self.assertEqual(errors(backup={"path": "~/b", "push": True}), [])
         self.assertEqual(errors(backup={"path": "~/b", "push": "yes"}), ["control-center.json: backup.push must be true or false"])
         self.assertEqual(len(errors(backup="~/b")), 1)
+
+
+def project(identifier: str = "app", **fields: object) -> dict[str, object]:
+    return {"schemaVersion": 1, "id": identifier, "checkout": identifier, "remote": "https://example.invalid/app.git",
+            "defaultBranch": "main", "kind": "project", "role": "app", "targets": ["linux"], "stack": ["python"],
+            "sourceInput": identifier, "adapter": f"nix/projects/{identifier}.nix", "status": "discovered", **fields}
+
+
+def catalog_errors(status: str, *descriptors: dict[str, object]) -> list[str]:
+    """validate() on a CC holding these repository descriptors; only the catalog's and the ready rule's errors."""
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        manifest = {"schemaVersion": 1, "name": "shop", "status": status, "layout": validator.EXPECTED_LAYOUT}
+        (root / "control-center.json").write_text(json.dumps(manifest), encoding="utf-8")
+        repositories = root / "catalog" / "repositories"
+        repositories.mkdir(parents=True)
+        for descriptor in descriptors:
+            (repositories / f"{descriptor['id']}.json").write_text(json.dumps(descriptor), encoding="utf-8")
+            adapter = root / str(descriptor["adapter"])
+            adapter.parent.mkdir(parents=True, exist_ok=True)
+            adapter.write_text("{ }\n", encoding="utf-8")
+        found = [error.replace("\\", "/") for error in validator.validate(root)]  # Windows prints catalog\...
+    return [error for error in found if error.startswith("catalog/repositories") or "ready CC" in error]
+
+
+class NewProjectRepos(unittest.TestCase):
+    """A repo made with ./cc repo new has remote null until set-remote (docs/kit/decisions/0031-new-project-cc.md)."""
+
+    def test_remote_shapes(self) -> None:
+        self.assertEqual(catalog_errors("adapting", project(remote=None)), [])
+        self.assertEqual(catalog_errors("adapting", project()), [])
+        message = ("catalog/repositories/app.json: 'remote' must be a non-empty string, or null for a project repo "
+                   "with no remote yet")
+        self.assertEqual(catalog_errors("adapting", project(remote="")), [message])
+        absent = project()
+        del absent["remote"]
+        self.assertEqual(catalog_errors("adapting", absent), [message])
+        reference = {**project(remote=None), "kind": "reference"}
+        self.assertEqual(catalog_errors("adapting", reference), [message])
+
+    def test_blocked_reason_must_not_be_empty(self) -> None:
+        self.assertEqual(catalog_errors("adapting", project(status="blocked", blockedReason=" ")),
+                         ["catalog/repositories/app.json: 'blockedReason' must be a non-empty string"])
+
+    def test_ready_needs_verified_or_blocked_with_reason(self) -> None:
+        self.assertEqual(catalog_errors("ready", project(status="verified")), [])
+        self.assertEqual(catalog_errors("ready", project(remote=None, status="blocked", blockedReason="no native gate yet")), [])
+        self.assertEqual(catalog_errors("ready", project(status="blocked")), [
+            'catalog/repositories/app.json: ready CC needs a blockedReason for a blocked repo; '
+            'run ./cc repo set-status app blocked --reason "<why>"'])
+        self.assertEqual(catalog_errors("ready", project(remote=None)), [
+            "catalog/repositories/app.json: ready CC requires status 'verified', or 'blocked' with a reason"])
+
+    def test_ready_needs_a_project_repo(self) -> None:
+        message = "control-center.json: ready CC must contain at least one project repository"
+        self.assertEqual(catalog_errors("ready"), [message])
+        self.assertEqual(catalog_errors("ready", {**project(), "kind": "reference"}), [message])
 
 
 if __name__ == "__main__":

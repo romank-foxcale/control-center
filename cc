@@ -27,12 +27,12 @@ usage() {
     '  agents <sync|check>  Mirror .agents/skills into .claude/skills' \
     '  bootstrap install [target]  Materialize a new CC from this clone' \
     '  bootstrap validate          Validate the configured CC contract' \
-    '  repo <add|list|show|remove|set-branch|set-remote|set-kind|set-status|set-targets|set-stack|strays> ...' \
+    '  repo <add|new|list|show|remove|set-branch|set-remote|set-kind|set-status|set-targets|set-stack|strays> ...' \
     '  prs [repo...] [--json]  Open pull requests of the catalog repos, newest first, new ones and waiting threads marked' \
     '  prs show <repo> <n> [--diff] | prs checkout <repo> <n>  One PR for review; its head as feature pr-<repo>-<n>' \
     '  prs threads|judge <repo> <n> [--all] [--json]  Review threads waiting on you; judge them with anonymous sceptics' \
     '  prs learn [repo...] [--since YYYY-MM-DD] [--harvest-only] [--json]  Accepted review comments of merged PRs since the last run; the review-learner agent turns them into candidate lessons' \
-    '  worktree <create|add|status|remove> ...' \
+    '  worktree <create|add|land|status|remove> ...' \
     '  migrate-layout [--dry-run]  Move this CC'"'"'s clones and worktrees from ../repos and ../worktrees into repos/ and worktrees/' \
     '  trello <status|boards|lists|connect|link|show|comment|move> ...  Trello cards, on demand only' \
     '  open <feature> [--tool claude|codex]  Start a coding session in the CC with the feature'"'"'s worktrees' \
@@ -54,11 +54,11 @@ lock_flake() {
 }
 
 nix_override_args=()
+# Every Nix call gets the same source overrides: the base clone of each repo with no remote yet (./cc repo new), then
+# the worktrees of CC_FEATURE, which win. Why: docs/kit/decisions/0031-new-project-cc.md
 load_feature_overrides() {
-  if [[ -z "${CC_FEATURE:-}" ]]; then
-    return
-  fi
-  override_output="$(python3 "$cc_root/scripts/worktrees.py" "$cc_root" nix-args "$CC_FEATURE")"
+  local override_output
+  override_output="$(python3 "$cc_root/scripts/worktrees.py" "$cc_root" nix-args ${CC_FEATURE:+"$CC_FEATURE"})"
   if [[ -n "$override_output" ]]; then
     while IFS= read -r argument; do
       nix_override_args+=("$argument")
@@ -79,6 +79,12 @@ case "$command_name" in
       exec python3 "$cc_root/scripts/disk.py" "$cc_root"
     fi
     nix --version
+    # Older Nix may resolve the placeholder flake input of a repo with no remote differently; 2.28 is the oldest tested.
+    # Why: docs/kit/decisions/0031-new-project-cc.md
+    nix_version="$(nix --version | grep -oE '[0-9]+\.[0-9]+' | head -n 1)"
+    if [[ -n "$nix_version" && "$(printf '%s\n' 2.28 "$nix_version" | sort -V | head -n 1)" != 2.28 ]]; then
+      printf 'warning: Nix %s is older than 2.28, the oldest version tested with repos that have no remote yet\n' "$nix_version"
+    fi
     if command -v docker >/dev/null 2>&1; then
       docker --version
     elif command -v podman >/dev/null 2>&1; then
@@ -93,6 +99,8 @@ case "$command_name" in
     fi
     python3 "$cc_root/scripts/council/providers.py" status
     python3 "$cc_root/scripts/repositories.py" "$cc_root" strays || true
+    # A repo with no remote is the only copy of its history. Why: docs/kit/decisions/0031-new-project-cc.md
+    python3 "$cc_root/scripts/repositories.py" "$cc_root" attention || true
     ;;
   backup)
     case "${1:-}" in

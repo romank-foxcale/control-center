@@ -132,7 +132,7 @@ def snapshot(root: Path) -> Snapshot:
                 "id": path.stem,
                 "kind": repo.get("kind", "project"),
                 "branch": repo.get("defaultBranch", "?"),
-                "remote": repo.get("remote", "?"),
+                "remote": "" if repo.get("remote", "?") is None else repo.get("remote", "?"),  # none yet: ./cc repo new
                 "status": repo.get("status", "?"),
                 "targets": ",".join(repo.get("targets") or []) or "?",
                 "stack": ",".join(repo.get("stack") or []) or "?",

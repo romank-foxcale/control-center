@@ -220,6 +220,12 @@ rec {
       metadata ? { },
     }:
     assert lib.assertMsg (name != "") "project name must not be empty";
+    # A repo with no remote yet has nix/placeholders/<id> as its flake input; ./cc overrides it with the base clone
+    # (scripts/worktrees.py source_overrides). Without the override no gate may build or pass on the placeholder.
+    # Only flake inputs (they carry a narHash) are checked, so a derivation src never forces a build at evaluation.
+    assert lib.assertMsg (
+      !(builtins.isAttrs src && src ? narHash && builtins.pathExists "${src}/CC_PLACEHOLDER")
+    ) "project ${name} has no remote yet and its source is the placeholder: run it through ./cc (./cc verify, ./cc check, ./cc build), which overrides the input with its base clone";
     assert lib.assertMsg (
       hasEntries packages || hasEntries checks || hasEntries apps || hasEntries targets
     ) "project ${name} must expose at least one package, check, app or target";
