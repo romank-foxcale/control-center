@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -172,7 +173,8 @@ def command_add(root: Path, args: argparse.Namespace) -> None:
     else:
         args.id = args.repository
     if not args.remote:
-        raise ValueError("give the repository URL: ./cc repo add <url> or ./cc repo add <id> --remote <url>")
+        raise ValueError("give the repository URL: ./cc repo add <url> or ./cc repo add <id> --remote <url>; "
+                         "to start a new project repo with no remote, run ./cc repo new <id>")
     reference = args.kind == "reference"
     targets = parse_targets(args.targets) if args.targets or not reference else []
     stack = parse_stack(args.stack) if args.stack or not reference else []
@@ -222,6 +224,90 @@ def command_add(root: Path, args: argparse.Namespace) -> None:
     print(f"added {args.id} ({args.kind}, branch {args.branch}): base checkout {state} at {checkout}")
 
 
+def last_backup(root: Path) -> str | None:
+    """The newest ./cc backup stamp in any folder ./cc backup recorded, or None (docs/kit/decisions/0030-disk-management.md)."""
+    try:
+        known = json.loads((root / ".cc-local" / "hooks" / "backup-locations.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    stamps = [entry.name for folder in known.get("backups", []) if Path(folder).is_dir()
+              for entry in Path(folder).iterdir() if entry.is_dir() and re.fullmatch(r"\d{8}-\d{6}", entry.name)]
+    return max(stamps, default=None)
+
+
+def only_copy_warning(root: Path, identifier: str) -> str:
+    """A repo with no remote has its whole history in one ignored folder (risk R1 of plans new-project-cc)."""
+    stamp = last_backup(root)
+    when = f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]}" if stamp else "never"
+    return (f"warning: {identifier} has no remote: repos/project/{identifier} is the only copy of its history on this "
+            f"disk; last backup: {when}. Run ./cc backup --to <folder> (or set backup.path), or add a remote with "
+            f"./cc repo set-remote {identifier} <url>")
+
+
+def git_identity_missing(root: Path) -> list[str]:
+    """What git lacks to make the first commit: user.name and user.email, from the environment or the config."""
+    missing = []
+    for key, variables in (("user.name", ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")),
+                           ("user.email", ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"))):
+        if all(os.environ.get(variable) for variable in variables):
+            continue
+        found = subprocess.run(["git", "config", "--get", key], cwd=root, capture_output=True, text=True)
+        if found.returncode != 0 or not found.stdout.strip():
+            missing.append(key)
+    return missing
+
+
+def command_new(root: Path, args: argparse.Namespace) -> None:
+    """./cc repo new <id>: start a new project repo with no remote yet (docs/kit/decisions/0034-new-project-cc.md).
+
+    git init in repos/project/<id> with one first commit (worktrees need a base) that holds a .gitattributes with
+    LF line ends (Windows checkouts with core.autocrlf would give WSL gates CRLF), a descriptor with remote null, and a
+    tracked placeholder source in nix/placeholders/<id> that ./cc overrides with the base clone on every Nix call."""
+    path = descriptor_path(root, args.id)  # checks the id before anything is written
+    if path.exists():
+        raise ValueError(f"repository already exists: {args.id}")
+    targets = parse_targets(args.targets)
+    stack = parse_stack(args.stack)
+    checkout = base_clone(root, args.id, "project")
+    if checkout.exists() and any(checkout.iterdir()):
+        raise ValueError(f"{checkout} already exists and is not empty; add an existing repo with ./cc repo add <url>")
+    missing = git_identity_missing(root)
+    if missing:
+        raise ValueError(f"git has no {' and no '.join(missing)} for the first commit; set them with "
+                         "git config --global user.name \"<name>\" and git config --global user.email <email>")
+    checkout.mkdir(parents=True, exist_ok=True)
+    git = ["git", "-C", str(checkout)]
+    subprocess.run(["git", "init", "-q", "-b", args.branch, str(checkout)], check=True)
+    (checkout / ".gitattributes").write_bytes(b"* text=auto eol=lf\n")
+    subprocess.run([*git, "add", ".gitattributes"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", f"Start {args.id}"], check=True)
+    placeholder = root / "nix" / "placeholders" / args.id / "CC_PLACEHOLDER"
+    placeholder.parent.mkdir(parents=True, exist_ok=True)
+    placeholder.write_bytes(
+        f"{args.id} has no remote yet. Its flake input points here, and ./cc overrides it with repos/project/{args.id}; "
+        "the adapter refuses this placeholder, so no gate passes without the real code.\n".encode())
+    write_json(
+        path,
+        {
+            "schemaVersion": 1,
+            "id": args.id,
+            "checkout": args.id,
+            "remote": None,
+            "defaultBranch": args.branch,
+            "kind": "project",
+            "role": args.role or "project",
+            "targets": targets,
+            "stack": stack,
+            "sourceInput": args.id,
+            "adapter": f"nix/projects/{args.id}.nix",
+            "status": "discovered",
+        },
+    )
+    print(f"created {args.id} (project, branch {args.branch}, no remote) at {checkout}")
+    print(f"flake input for the adapter: {args.id} = {{ url = \"path:./nix/placeholders/{args.id}\"; flake = false; }};")
+    print(only_copy_warning(root, args.id))
+
+
 def stray_clones(root: Path) -> list[str]:
     """Folders in this CC's repos/ that its catalog does not list: a clone nobody declared is out of scope
     (docs/kit/decisions/0016-per-cc-repos-and-worktrees.md). Nix checks cannot see the ignored folder, so verify
@@ -259,6 +345,9 @@ def command_update(root: Path, args: argparse.Namespace) -> None:
         if not is_git_checkout(checkout):
             print(f"{identifier}: no base clone at {checkout}; clone it with ./cc repo add --clone")
             continue
+        if data.get("remote") is None:
+            print(f"{identifier}: no remote yet, nothing to fetch")
+            continue
         if data.get("kind") == "reference":
             protect(checkout, read_only=False)
             try:
@@ -282,7 +371,7 @@ def command_list(root: Path, _: argparse.Namespace) -> None:
         stack = ",".join(data.get("stack") or []) or "?"
         rows.append(
             (identifier, str(data.get("kind", "project")), str(data.get("defaultBranch", "?")), str(data.get("status", "?")),
-             targets, stack, present, str(data.get("remote", "?")))
+             targets, stack, present, "none (local)" if data.get("remote", "?") is None else str(data.get("remote", "?")))
         )
     if not rows:
         print("no repositories")
@@ -300,11 +389,20 @@ def command_show(root: Path, args: argparse.Namespace) -> None:
 def command_status(root: Path, args: argparse.Namespace) -> None:
     if args.status not in STATUSES:
         raise ValueError(f"unsupported status: {args.status}")
+    # A blocked repo says why, so a ready CC never reads as tested (docs/kit/decisions/0034-new-project-cc.md).
+    if args.status == "blocked" and not (args.reason or "").strip():
+        raise ValueError(f"say why it is blocked: ./cc repo set-status {args.id} blocked --reason \"<why>\"")
+    if args.status != "blocked" and args.reason:
+        raise ValueError("--reason is only for the blocked status")
     path = descriptor_path(root, args.id)
     data = load_json(path)
     data["status"] = args.status
+    if args.status == "blocked":
+        data["blockedReason"] = args.reason.strip()
+    else:
+        data.pop("blockedReason", None)
     write_json(path, data)
-    print(f"{args.id}: {args.status}")
+    print(f"{args.id}: {args.status}" + (f" ({data['blockedReason']})" if args.status == "blocked" else ""))
 
 
 def command_targets(root: Path, args: argparse.Namespace) -> None:
@@ -344,6 +442,8 @@ def command_remove(root: Path, args: argparse.Namespace) -> None:
         protect(checkout, read_only=False)  # a clone outside the catalog is a stray to delete, not evidence to keep
     path.unlink()
     print(f"removed {args.id} from the catalog")
+    if data.get("remote") is None and is_git_checkout(checkout):
+        print(only_copy_warning(root, args.id))
     if is_git_checkout(checkout):
         print(f"note: the base clone {checkout} is kept, writable, and ./cc repo strays reports it; delete it yourself "
               "if the repo is gone for good")
@@ -355,6 +455,16 @@ def command_remove(root: Path, args: argparse.Namespace) -> None:
 def command_branch(root: Path, args: argparse.Namespace) -> None:
     path = descriptor_path(root, args.id)
     data = load_json(path)
+    if data.get("remote") is None:
+        checkout = base_clone(root, args.id, data.get("kind", "project"))
+        local = subprocess.run(["git", "-C", str(checkout), "rev-parse", "--verify", "--quiet", f"refs/heads/{args.branch}"],
+                               capture_output=True, text=True)
+        if local.returncode != 0:
+            raise ValueError(f"{checkout} has no branch {args.branch}")
+        data["defaultBranch"] = args.branch
+        write_json(path, data)
+        print(f"{args.id}: default branch {args.branch}")
+        return
     found = remote_has_branch(str(data["remote"]), args.branch)
     if found is False:
         raise ValueError(f"{data['remote']} has no branch {args.branch}")
@@ -370,6 +480,13 @@ def command_remote(root: Path, args: argparse.Namespace) -> None:
         raise ValueError("remote must be a portable Git URL")
     path = descriptor_path(root, args.id)
     data = load_json(path)
+    if data.get("remote") is None:
+        connect_remote(root, args.id, data, args.remote)
+        data["remote"] = args.remote
+        write_json(path, data)  # last: a failure before this leaves the catalog as it was, so a retry is safe
+        print(f"{args.id}: remote {args.remote}; push with git -C repos/project/{args.id} push -u origin "
+              f"{data['defaultBranch']}, then features use the normal push and PR flow")
+        return
     data["remote"] = args.remote
     write_json(path, data)
     print(f"{args.id}: remote {args.remote}")
@@ -377,6 +494,37 @@ def command_remote(root: Path, args: argparse.Namespace) -> None:
         require_remote(base_clone(root, args.id, data.get("kind", "project")), args.remote, root)
     except ValueError as error:
         print(f"warning: {error}; update the clone with git remote set-url origin {args.remote}")
+
+
+def connect_remote(root: Path, identifier: str, data: dict[str, Any], remote: str) -> None:
+    """Give a repo made with ./cc repo new its origin. The remote must be empty, or its default branch must already be in
+    the local history: a remote made with a README would make new features start from that unrelated commit (R6)."""
+    checkout = base_clone(root, identifier, data.get("kind", "project"))
+    if not is_git_checkout(checkout):
+        raise ValueError(f"no base clone at {checkout}")
+    git = ["git", "-C", str(checkout)]
+    existing = subprocess.run([*git, "remote", "get-url", "origin"], capture_output=True, text=True)
+    if existing.returncode == 0 and canonical_remote(existing.stdout.strip(), root) != canonical_remote(remote, root):
+        raise ValueError(f"{checkout} already has origin {existing.stdout.strip()}; remove it or use that URL")
+    if existing.returncode != 0:
+        subprocess.run([*git, "remote", "add", "origin", "--", remote], check=True)
+    try:
+        heads = subprocess.run([*git, "ls-remote", "--heads", "origin"], capture_output=True, text=True, timeout=60)
+        if heads.returncode != 0:
+            raise ValueError(f"cannot reach {remote}: {heads.stderr.strip()}")
+        if heads.stdout.strip():
+            branch = data["defaultBranch"]
+            subprocess.run([*git, "fetch", "--quiet", "origin"], check=True, timeout=300)
+            remote_branch = f"refs/remotes/origin/{branch}"
+            if subprocess.run([*git, "rev-parse", "--verify", "--quiet", remote_branch], capture_output=True).returncode:
+                raise ValueError(f"{remote} is not empty and has no branch {branch}; use an empty remote")
+            if subprocess.run([*git, "merge-base", "--is-ancestor", remote_branch, f"refs/heads/{branch}"]).returncode:
+                raise ValueError(f"{remote} has commits that are not in {identifier}'s history (for example a README made "
+                                 "on the website); use an empty remote")
+    except (ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        if existing.returncode != 0:
+            subprocess.run([*git, "remote", "remove", "origin"], capture_output=True)
+        raise
 
 
 def command_kind(root: Path, args: argparse.Namespace) -> None:
@@ -426,6 +574,14 @@ def parser() -> argparse.ArgumentParser:
     add.add_argument("--clone", action="store_true")
     add.set_defaults(handler=command_add)
 
+    new = subparsers.add_parser("new", help="start a new project repo with no remote yet: git init in repos/project/<id>")
+    new.add_argument("id")
+    new.add_argument("--targets", nargs="+", default=[], help=f"platforms it ships on: {', '.join(TARGETS)}")
+    new.add_argument("--stack", nargs="+", default=[], help="languages, e.g. java, python, typescript, csharp")
+    new.add_argument("--branch", default="main", help="main branch (default: main)")
+    new.add_argument("--role", help="what the repo is, e.g. backend API")
+    new.set_defaults(handler=command_new)
+
     listing = subparsers.add_parser("list")
     listing.set_defaults(handler=command_list)
 
@@ -436,6 +592,7 @@ def parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("set-status")
     status.add_argument("id")
     status.add_argument("status")
+    status.add_argument("--reason", help="why the repo is blocked; required for blocked")
     status.set_defaults(handler=command_status)
 
     targets = subparsers.add_parser("set-targets")

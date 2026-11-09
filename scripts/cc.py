@@ -42,7 +42,7 @@ Commands:
   hook <event>   Run a rule hook on the event JSON in stdin (called by Claude Code, see .claude/settings.json)
   bootstrap install [target]  Materialize a new CC from this clone
   bootstrap validate          Validate the configured CC contract
-  repo <add|list|show|remove|set-branch|set-remote|set-kind|set-status|set-targets|set-stack|strays> ...
+  repo <add|new|list|show|remove|set-branch|set-remote|set-kind|set-status|set-targets|set-stack|strays> ...
   prs [repo...] [--json]  Open pull requests of the catalog repos, newest first, new ones and waiting threads marked
   prs show <repo> <n> [--diff] | prs checkout <repo> <n>  One PR for review; its head as feature pr-<repo>-<n>
   prs threads|judge <repo> <n> [--all] [--json]  Review threads waiting on you; judge them with anonymous sceptics
