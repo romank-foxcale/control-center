@@ -18,13 +18,14 @@ relations:
   - docs/kit/rules/quality-gates.md
   - docs/kit/decisions/0022-deterministic-checks-before-review.md
   - docs/kit/decisions/0027-python-gate-venv-cache.md
+  - docs/kit/decisions/0031-new-project-cc.md
 ---
 
 # Connecting sibling projects
 
 ## Project contract
 
-`catalog/repositories/<id>.json` records the remote, default branch, kind (`project`, or `reference` for read-only guidance that needs no adapter), role, target platforms, stack (languages), flake input, adapter and onboarding status. The descriptor is created by `./cc repo add`; build commands never go into it.
+`catalog/repositories/<id>.json` records the remote (`null` while a new repo has none), default branch, kind (`project`, or `reference` for read-only guidance that needs no adapter), role, target platforms, stack (languages), flake input, adapter and onboarding status. The descriptor is created by `./cc repo add`; build commands never go into it.
 
 The adapter is created with `ccLib.mkProject` and declares:
 
@@ -38,7 +39,7 @@ The adapter is created with `ccLib.mkProject` and declares:
 
 The adapter's attribute name in `nix/projects` equals the catalog id, so its targets can be matched against the catalog.
 
-The remote source is pinned in `flake.lock`. Local development does not change the contract: the same input is temporarily overridden to `path:../repo`.
+The remote source is pinned in `flake.lock`. Local development does not change the contract: the same input is temporarily overridden to `path:../repo`. A repo made with `./cc repo new` has no remote yet: its input is the tracked placeholder `path:./nix/placeholders/<id>`, which `./cc` overrides with the base clone on every Nix call and `ccLib.mkProject` refuses on its own ([0031](../decisions/0031-new-project-cc.md)).
 
 ## Division of responsibility
 

@@ -1,6 +1,6 @@
 ---
 name: grill-cc-bootstrap
-description: Evidence-first interview that creates or migrates a Control Center and onboards its repositories (catalog entry, Nix adapter, a gate per platform, verify). Use to set up, continue setting up or migrate a CC, when its status is discovery or adapting, and when a project repo is added to a ready CC.
+description: Evidence-first interview that creates or migrates a Control Center for one new project or many existing repos, and onboards its repositories (catalog entry, Nix adapter, a gate per platform, verify). Use to set up, continue setting up or migrate a CC, when its status is discovery or adapting, and when a project repo is added to or created in a ready CC.
 ---
 
 # Grill CC bootstrap
@@ -12,11 +12,20 @@ First read `../_shared/grilling-core.md` in full, then `BOOTSTRAP.md`. Apply bot
 1. Determine `template_root` and `target_root` as described in `BOOTSTRAP.md`. If the CC was created with `cc-kit new`, steps 1–2 are already done.
 2. Run the materialization; continue from `target_root`.
 3. Record the name, status and topology in `control-center.json`.
-4. Collect the use cases, boundaries and permissions.
-5. Build the repository inventory. Do not write adapters until names, roles and relationships are agreed.
-6. Onboard one repo at a time: `./cc repo add --targets ... --stack ...` → inspect → flake input/adapter → package/check, static checks, one gate per target and, where feasible, `quality.mutation` → `./cc verify <id> --quality` → `./cc repo set-status <id> verified`.
+4. Ask first: "Does this CC cover repos that already exist, a new project that has no repos yet, or both?" Then collect the use cases, boundaries and permissions.
+5. Build the repository inventory: the existing repos, and the new repos to create, each with a name, a role and its relationships. Do not write adapters until they are agreed.
+6. Onboard one existing repo at a time: `./cc repo add --targets ... --stack ...` → inspect → flake input/adapter → package/check, static checks, one gate per target and, where feasible, `quality.mutation` → `./cc verify <id> --quality` → `./cc repo set-status <id> verified`. Create each new repo with "New project repos" below.
 7. Only then assemble workflows and benchmarks. Every contract between two repos (an API spec and the client or types generated from it, a shared schema) gets a contract check from `templates/workflow.nix`.
 8. Replace the template README and project map with real data; remove the placeholders. Keep `GUIDE.md`, `install/`, `CLAUDE.md` and `.claude/skills`: they are the entry point for people and AI tools.
+
+## New project repos
+
+A new repo has no code and no remote yet (docs/kit/decisions/0031-new-project-cc.md). Agree its id, role, stack and target platforms, then:
+
+1. `./cc repo new <id> --targets <platform>... --stack <language>... [--branch main] [--role "<role>"]`. It runs `git init` in `repos/project/<id>`, makes one first commit with LF line ends, writes the descriptor with `"remote": null`, and writes the placeholder `nix/placeholders/<id>/`. Commit the descriptor and the placeholder in the CC.
+2. Tell the user in plain words: the repo is only on this disk until it has a remote, so offer `backup.path` in `control-center.json` (or `./cc backup --to <folder>`); a remote can come any time with `./cc repo set-remote <id> <url>`, and it must be an empty repository (no README).
+3. Do not write a code skeleton. The repo stays `discovered`, and the CC stays `adapting`, until the first feature (`./cc worktree create <feature> <id>`) adds the code, the adapter (flake input `<id> = { url = "path:./nix/placeholders/<id>"; flake = false; };`) and a gate per target. While the repo has no remote, finish a feature with `./cc worktree land <feature> <id>`: it needs a passing `./cc feature <feature> verify`, or `--unverified "<reason>"` only after the user agrees.
+4. Where no gate can run yet (for example the repo has no code yet), set `./cc repo set-status <id> blocked --reason "<why>"`. The CC can then be `ready`; `./cc doctor` and `./cc verify` keep naming the blocked repo until it is verified.
 
 ## Migration
 
@@ -32,7 +41,7 @@ First read `../_shared/grilling-core.md` in full, then `BOOTSTRAP.md`. Apply bot
 
 The user may know nothing about Nix or how a CC works: never ask them to write or choose Nix, and explain each step in plain words. Read the stack and the build and test commands from the repo's files (`package.json`, `pyproject.toml`, `*.csproj`, `go.mod`, `Cargo.toml`, `CMakeLists.txt`, ...) and its CI, propose them, and ask only for confirmation. To add one repo to a ready CC, run only this section and step 6 of "New CC" for it.
 
-First study the repo and its CI, then close the gaps: remote/branch/role/owner; inputs/outputs/consumers; build/test interface; system/network dependencies; platforms/hardware; secrets/datasets/models/external state; the minimal adapter check.
+For an existing repo, first study the repo and its CI, then close the gaps: remote/branch/role/owner; inputs/outputs/consumers; build/test interface; system/network dependencies; platforms/hardware; secrets/datasets/models/external state; the minimal adapter check.
 
 Put build commands straight into the Nix adapter, not into the grilling transcript.
 
@@ -58,7 +67,7 @@ Then propose a `quality.mutation` gate with the stack's default tool from `docs/
 ## Acceptance
 
 - `control-center.json` and the catalog are valid.
-- Every repo declares its targets and is verified on all of them by `./cc verify`, or has an explicit blocker.
+- At least one project repo exists. Every repo declares its targets and is verified on all of them by `./cc verify`, or is blocked with a `blockedReason`. A new repo with no code yet keeps the CC `adapting`.
 - Every repo runs its stack's static checks, or the reason it does not is recorded.
 - Cross-repo relationships are represented by a workflow/check; a generated contract artifact by a contract check.
 - The critical path passes end to end.

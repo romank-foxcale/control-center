@@ -58,8 +58,10 @@ In normal work use the executable interface, not manual `git worktree`:
 
 ```bash
 ./cc repo add <git-url> --role <role> --targets <windows|linux|macos>... --stack <language>... --clone
+./cc repo new <id> --role <role> --targets <windows|linux|macos>... --stack <language>...   # a new project repo, no remote yet
 ./cc worktree create <feature> <repo>...
 ./cc feature <feature> verify
+./cc worktree land <feature> <repo>     # only while the repo has no remote
 ./cc worktree status <feature>
 ./cc worktree remove <feature>
 ```
@@ -71,7 +73,7 @@ In normal work use the executable interface, not manual `git worktree`:
 Do not declare the bootstrap finished until:
 
 1. `control-center.json` and the catalog reflect the agreed model.
-2. Every connected repository has a pinned source, a Nix adapter, a check, and a gate for each target platform it ships on.
+2. Every project repository has a pinned source (or, while it has no remote yet, its base clone through `./cc`), a Nix adapter, a check, and a gate for each target platform it ships on; or it is blocked with a `blockedReason`. A new repo with no code yet keeps the CC `adapting` (docs/kit/decisions/0031-new-project-cc.md).
 3. Workflows consume declared outputs instead of duplicating build commands.
 4. Unknown facts are explicitly marked and contradictions are resolved.
 5. `./cc bootstrap validate` and `./cc verify` pass, or the unverified environment is explicitly recorded.
