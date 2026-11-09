@@ -743,6 +743,8 @@ def command_reject(root: Path, args: argparse.Namespace) -> None:
 
 
 def command_status(root: Path, args: argparse.Namespace) -> None:
+    if not (root / "control-center.json").is_file():  # the template itself, or a folder that is no CC
+        raise ValueError("not a Control Center yet: run ./cc bootstrap install")
     if args.run:
         run = find_run(root, args.run)
         if run.state["stage"] == "awaiting-approval":
