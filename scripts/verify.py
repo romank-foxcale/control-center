@@ -212,7 +212,7 @@ def run_verify(root: Path, args: argparse.Namespace, live: Gates) -> int:
         print("\t".join(row))
     if not all(result in {"pass", WARN} for _, _, result in results):
         return 1
-    stamp_trees(root, started)
+    stamp_trees(root, started, nix=nix_found)  # with Nix, the passing checks included nix flake check
     return 0
 
 
@@ -233,7 +233,7 @@ def tree_snapshot(paths: list[Path]) -> dict[Path, str | None]:
     return trees
 
 
-def stamp_trees(root: Path, started: dict[Path, str | None]) -> None:
+def stamp_trees(root: Path, started: dict[Path, str | None], nix: bool | None = None) -> None:
     """Record the trees this passing run tested, for the push hook, only where the tree did not change during the run.
 
     Why: docs/kit/decisions/0028-verify-before-push.md
@@ -245,7 +245,7 @@ def stamp_trees(root: Path, started: dict[Path, str | None]) -> None:
             print(f"warning: no verify stamp for {path}: files changed while verify ran; run it again", file=sys.stderr)
         else:
             try:
-                verified.record(root, path, "verify", tree=tree)
+                verified.record(root, path, "verify", tree=tree, nix=nix)
             except (OSError, subprocess.CalledProcessError) as error:
                 print(f"warning: no verify stamp for {path}: {error}", file=sys.stderr)
 

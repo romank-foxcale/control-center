@@ -83,9 +83,11 @@ def test_a_pass_should_stamp_the_cc_and_only_the_selected_worktrees(root: Path) 
         subprocess.run(["git", "init", "-q", str(path)], check=True)
         subprocess.run(["git", "-C", str(path), "add", "a.txt"], check=True)
     with contextlib.redirect_stderr(io.StringIO()):
-        verify.stamp_trees(root, verify.tree_snapshot(verify.tested_paths(root, "f", ["api"])))
+        verify.stamp_trees(root, verify.tree_snapshot(verify.tested_paths(root, "f", ["api"])), nix=False)
     kinds = lambda path: (verified.lookup(root, verified.working_tree(path)) or {}).get("kinds")
     check("cc stamped", kinds(root) == ["verify"], kinds(root))
+    nix = (verified.lookup(root, verified.working_tree(root)) or {}).get("nix")
+    check("the stamp records whether the Nix part ran", nix is False, nix)
     check("selected worktree stamped", kinds(root / "worktrees" / "f" / "api_wt") == ["verify"])
     check("other worktree not stamped", kinds(root / "worktrees" / "f" / "web_wt") is None)
 
