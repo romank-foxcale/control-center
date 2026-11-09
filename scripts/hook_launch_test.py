@@ -56,7 +56,8 @@ def environment(bin_dir: Path, cache: Path) -> dict[str, str]:
     if WINDOWS:
         system = os.environ.get("SYSTEMROOT", r"C:\Windows")
         git_cmd = git_bash().parent.parent / "cmd"
-        env["PATH"] = os.pathsep.join([str(Path(system) / "System32"), system, str(git_cmd)])
+        # Not %SYSTEMROOT% itself: the Python launcher py.exe can live there (it does on GitHub's Windows runners).
+        env["PATH"] = os.pathsep.join([str(Path(system) / "System32"), str(git_cmd)])
         for name in ("SYSTEMROOT", "SYSTEMDRIVE", "TEMP", "TMP", "USERPROFILE", "LOCALAPPDATA", "APPDATA",
                      "PROGRAMDATA", "COMSPEC", "PATHEXT", "WINDIR", "HOMEDRIVE", "HOMEPATH"):
             if name in os.environ:
