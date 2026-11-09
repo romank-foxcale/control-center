@@ -42,15 +42,10 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def override_args(root: Path, feature: str | None) -> list[str]:
-    if not feature:
-        return []
-    result = subprocess.run(
-        [sys.executable, str(root / "scripts" / "worktrees.py"), str(root), "nix-args", feature],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.splitlines()
+    """worktrees.py source_overrides: base clones of repos with no remote, then the feature's worktrees."""
+    import worktrees
+
+    return worktrees.source_overrides(root, feature)
 
 
 def selected_repositories(root: Path, feature: str | None, requested: list[str]) -> list[dict[str, Any]]:
@@ -210,6 +205,9 @@ def run_verify(root: Path, args: argparse.Namespace, live: Gates) -> int:
     print("\nREPO\tGATE\tRESULT")
     for row in results:
         print("\t".join(row))
+    if (root / "control-center.json").is_file():
+        for line in repositories_catalog.attention(root, nix_found):
+            print(line)
     if not all(result in {"pass", WARN} for _, _, result in results):
         return 1
     stamp_trees(root, started, nix=nix_found)  # with Nix, the passing checks included nix flake check

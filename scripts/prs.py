@@ -70,6 +70,8 @@ def slug(root: Path, identifier: str) -> str:
     repos = catalog(root)
     if identifier not in repos:
         raise ValueError(f"not in the catalog: {identifier}; see ./cc repo list")
+    if repos[identifier].get("remote", "") is None:
+        raise ValueError(f"{identifier}: no remote yet, so it has no pull requests; see ./cc repo set-remote")
     match = GITHUB.search(str(repos[identifier].get("remote", "")))
     if not match:
         raise ValueError(f"{identifier}: not a GitHub remote")
@@ -155,6 +157,9 @@ def collect(root: Path, requested: list[str]) -> tuple[list[dict[str, Any]], lis
     rows: list[dict[str, Any]] = []
     problems: list[str] = []
     for identifier in requested or sorted(repos):
+        if repos[identifier].get("remote", "") is None:
+            problems.append(f"{identifier}: no remote yet; skipped")
+            continue
         remote = str(repos[identifier].get("remote", ""))
         match = GITHUB.search(remote)
         if not match:

@@ -185,7 +185,16 @@ def main() -> int:
         real_which = shutil.which
         with mock.patch.object(shutil, "which", side_effect=lambda name, *rest, **options:
                                None if name == "nix" else real_which(name, *rest, **options)):
-            asyncio.run(check(fixture(Path(directory))))
+            root = fixture(Path(directory))
+            asyncio.run(check(root))
+        # A repo made with ./cc repo new has remote null: the panel gets "", never None or "None", and the
+        # set-remote prompt then starts empty (docs/kit/decisions/0034-new-project-cc.md).
+        write(root / "catalog/repositories/fresh.json", {"status": "discovered", "targets": ["linux"], "stack": ["python"],
+                                                          "kind": "project", "defaultBranch": "main", "remote": None})
+        fresh = next(repo for repo in snapshot(root).repos if repo["id"] == "fresh")
+        assert fresh["remote"] == "", fresh
+        text = show(snapshot(root))
+        assert "None" not in text and "none (local)" in text, text
     print("settings smoke test passed")
     return 0
 

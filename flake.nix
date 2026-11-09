@@ -101,6 +101,7 @@
                 ${pkgs.python3}/bin/python -B ${self}/scripts/data_test.py
                 ${pkgs.python3}/bin/python -B ${self}/scripts/relock_test.py
                 ${pkgs.python3}/bin/python -B ${self}/scripts/plans_test.py
+                ${pkgs.python3}/bin/python -B ${self}/scripts/worktrees_test.py
                 touch "$out"
               '';
               prs = pkgs.runCommand "control-center-prs" { nativeBuildInputs = [ pkgs.git ]; } ''

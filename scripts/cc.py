@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -43,12 +44,12 @@ Commands:
   hook <event>   Run a rule hook on the event JSON in stdin (called by Claude Code, see .claude/settings.json)
   bootstrap install [target]  Materialize a new CC from this clone
   bootstrap validate          Validate the configured CC contract
-  repo <add|list|show|remove|set-branch|set-remote|set-kind|set-status|set-targets|set-stack|strays> ...
+  repo <add|new|list|show|remove|set-branch|set-remote|set-kind|set-status|set-targets|set-stack|strays> ...
   prs [repo...] [--json]  Open pull requests of the catalog repos, newest first, new ones and waiting threads marked
   prs show <repo> <n> [--diff] | prs checkout <repo> <n>  One PR for review; its head as feature pr-<repo>-<n>
   prs threads|judge <repo> <n> [--all] [--json]  Review threads waiting on you; judge them with anonymous sceptics
   prs learn [repo...] [--since YYYY-MM-DD] [--harvest-only] [--json]  Accepted review comments of merged PRs since the last run; the review-learner agent turns them into candidate lessons
-  worktree <create|add|status|remove> ...
+  worktree <create|add|land|status|remove> ...
   migrate-layout [--dry-run]  Move this CC's clones and worktrees from ../repos and ../worktrees into repos/ and worktrees/
   trello <status|boards|lists|connect|link|show|comment|move> ...  Trello cards, on demand only
   open <feature> [--tool claude|codex]  Start a coding session in the CC with the feature's worktrees
@@ -98,11 +99,12 @@ def lock_flake(nix: str) -> None:
     subprocess.run([nix, "flake", "lock", str(ROOT), "--quiet"], check=True)
 
 
-def feature_overrides() -> list[str]:
+def source_overrides() -> list[str]:
+    """--override-input for repos with no remote (their base clone) and for CC_FEATURE's worktrees: worktrees.py
+    source_overrides is the one place that decides them, for every Nix call."""
     feature = os.environ.get("CC_FEATURE")
-    if not feature:
-        return []
-    output = subprocess.run([sys.executable, str(SCRIPTS / "worktrees.py"), str(ROOT), "nix-args", feature],
+    output = subprocess.run([sys.executable, str(SCRIPTS / "worktrees.py"), str(ROOT), "nix-args",
+                             *([feature] if feature else [])],
                             stdout=subprocess.PIPE, text=True, encoding="utf-8", check=True).stdout
     return [line for line in output.splitlines() if line]
 
@@ -198,8 +200,11 @@ def doctor(arguments: list[str]) -> int:
         say("error: Git for Windows (Git Bash) is missing; the rule hooks need it")
     say(claude_line())
     found = shutil.which("nix")
-    say(subprocess.run([found, "--version"], capture_output=True, text=True).stdout.strip() if found
-        else "note: Nix is absent; the optional Nix extra (build, run, relock, gc, Nix gates) is unavailable")
+    version = subprocess.run([found, "--version"], capture_output=True, text=True).stdout.strip() if found else ""
+    say(version or "note: Nix is absent; the optional Nix extra (build, run, relock, gc, Nix gates) is unavailable")
+    if old_nix(version):
+        say(f"warning: {version} is older than {'.'.join(map(str, MINIMUM_NIX))}, the oldest Nix tested with the "
+            "placeholder input of a repo with no remote (docs/kit/decisions/0034-new-project-cc.md); update Nix")
     if docker := shutil.which("docker") or shutil.which("podman"):
         say(subprocess.run([docker, "--version"], capture_output=True, text=True).stdout.strip())
     else:
@@ -212,7 +217,18 @@ def doctor(arguments: list[str]) -> int:
     sys.stdout.flush()  # keep this order with the output of the scripts called below
     script("council/providers.py", "status", root=False)
     script("repositories.py", "strays")
+    if (ROOT / "control-center.json").is_file():
+        script("repositories.py", "attention")
     return 1 if any(line.startswith("error:") for line in lines) else 0
+
+
+MINIMUM_NIX = (2, 28)
+
+
+def old_nix(version: str) -> bool:
+    """Whether `nix --version` output names a Nix older than MINIMUM_NIX; False when it names none."""
+    match = re.search(r"(\d+)\.(\d+)", version)
+    return bool(match) and (int(match.group(1)), int(match.group(2))) < MINIMUM_NIX
 
 
 def check(arguments: list[str]) -> int:
@@ -254,7 +270,7 @@ def show(arguments: list[str]) -> int:
         print("note: Nix is absent; flake packages, apps and Nix gates belong to the optional Nix extra")
         return 0 if not arguments else nix("flake", "show")  # flake arguments need Nix: fail clearly
     print("\nFlake outputs (Nix extra):", flush=True)
-    return nix("flake", "show", *feature_overrides(), str(ROOT), *arguments)
+    return nix("flake", "show", *source_overrides(), str(ROOT), *arguments)
 
 
 def bootstrap(arguments: list[str]) -> int:
@@ -297,10 +313,10 @@ def main(argv: list[str]) -> int:
             return check(arguments)
         if command == "build":
             name, rest = target(arguments, "build")
-            return nix("build", *feature_overrides(), f"{ROOT}#{name}", *rest)
+            return nix("build", *source_overrides(), f"{ROOT}#{name}", *rest)
         if command == "run":
             name, rest = target(arguments, "run")
-            return nix("run", *feature_overrides(), f"{ROOT}#{name}", "--", *rest)
+            return nix("run", *source_overrides(), f"{ROOT}#{name}", "--", *rest)
         if command == "verify":
             if found := shutil.which("nix"):
                 lock_flake(found)
