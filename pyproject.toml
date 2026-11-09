@@ -1,4 +1,4 @@
-# The CC core's Python environment, run by the cc / cc.cmd shims through uv (plan native-core).
+# The CC core's Python environment, run by the cc / cc.cmd shims through uv (docs/kit/decisions/0033-native-core-nix-optional.md).
 # Not a package: the scripts run from scripts/; uv.lock pins every dependency.
 [project]
 name = "control-center"

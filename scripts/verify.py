@@ -2,7 +2,7 @@
 """Run every CC check, then the gate of each catalog target (and, with --quality, each quality gate).
 
 The checks are the native ones of ./cc check (scripts/checks.py), plus nix flake check when Nix is installed. Target
-and quality gates are Nix-defined until project adapters get a native backend (plan native-core, milestone 2), so
+and quality gates are Nix-defined until project adapters get a native backend (docs/kit/decisions/0033-native-core-nix-optional.md), so
 without Nix a declared gate has no runnable backend on this host and FAILs: a missing gate is never a pass (risk K1).
 A pass stamps each tested tree only when it is the same at the end as at the start, so an edit made while verify ran
 is never covered by the stamp. Why: docs/kit/decisions/0028-verify-before-push.md

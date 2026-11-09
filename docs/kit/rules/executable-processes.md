@@ -41,7 +41,7 @@ relations:
 
 ## Commands on each host
 
-The CC core runs natively through uv on every OS; Nix is an optional extra (plan native-core). `scripts/cc_test.py` and
+The CC core runs natively through uv on every OS; Nix is an optional extra (docs/kit/decisions/0033-native-core-nix-optional.md). `scripts/cc_test.py` and
 `scripts/verify_test.py` assert the rows that differ.
 
 | Command | Windows, macOS or Linux without Nix | Linux or macOS with Nix |

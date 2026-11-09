@@ -1,7 +1,7 @@
 # The CC's own gates on every pull request: the same ./cc check a developer runs, from a fresh clone on Windows,
 # macOS and Linux with nothing preinstalled (the shims fetch the pinned uv and Python), then a comparison of the
 # tests each OS ran, and nix flake check for the optional Nix extra.
-# Why: docs/kit/decisions/0021-cc-check-in-ci.md, plan native-core (W6)
+# Why: docs/kit/decisions/0021-cc-check-in-ci.md, docs/kit/decisions/0033-native-core-nix-optional.md
 name: cc check
 
 on:

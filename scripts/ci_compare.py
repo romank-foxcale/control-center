@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare the ./cc check summaries of several OSes (CC_CHECK_SUMMARY, written by scripts/checks.py) and fail when
 they differ: every step must run and pass on every OS, with the same number of tests, and skip only what EXPECTED_SKIPS
-allows. A test skipped on purpose on one OS is then visible in CI, not hidden in a passing row (plan native-core, W6).
+allows. A test skipped on purpose on one OS is then visible in CI, not hidden in a passing row (docs/kit/decisions/0033-native-core-nix-optional.md).
 
 Usage: ci_compare.py <summary.json>...
 """
@@ -12,7 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-# (sys.platform, script) -> tests that may be skipped there. Nothing else may skip. Why: plan native-core, W4.
+# (sys.platform, script) -> tests that may be skipped there. Nothing else may skip. Why: docs/kit/decisions/0033-native-core-nix-optional.md.
 EXPECTED_SKIPS = {
     ("win32", "scripts/store_gc_test.py"): 5,  # ./cc gc is part of the Nix extra; Nix does not run on Windows
 }

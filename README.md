@@ -20,7 +20,7 @@ You don't need to know how it works inside. You talk to the agent; it does the r
   irm https://raw.githubusercontent.com/romank-foxcale/command-center/main/install/windows/install.ps1 -OutFile $env:TEMP\cc-install.ps1; powershell -ExecutionPolicy Bypass -File $env:TEMP\cc-install.ps1
   ```
 
-  When Ubuntu asks, create a Linux username and password. If Windows asks to restart, restart it: the install continues by itself after you sign in.
+  It installs Git for Windows if it is missing, Claude Code, the kit and your first CC. It needs no WSL and no Nix.
 
 - **macOS:** in Terminal:
 
@@ -28,7 +28,9 @@ You don't need to know how it works inside. You talk to the agent; it does the r
   curl -fsSL https://raw.githubusercontent.com/romank-foxcale/command-center/main/install/install.sh | bash
   ```
 
-The installers also set up Nix (on Windows inside WSL): the optional extra that builds and checks your project repos today. The CC itself runs without it; see "Without `cc-kit`" below.
+The macOS installer also sets up Nix: the optional extra that builds and checks your project repos today. On Windows, add `-WithNix` to the end of the second command to get it, inside WSL. The CC itself runs without it; see "Without `cc-kit`" below.
+
+Claude Code must be version 2.1.295 or later: older versions let a failing rule hook allow the call. `./cc doctor` checks this.
 
 **2. Name your first Control Center.** The installer asks for a name at the end. Use the product or system it covers, for example `shop`.
 
@@ -90,7 +92,7 @@ Everything runs through `./cc` in the CC folder, natively on Windows, macOS and 
                                               # measure an AGENTS.md or skill change: pass rate, tokens, cost, time
 ```
 
-Nix with flakes is an optional extra: `./cc build`, `run`, `relock`, `gc`, `eval` and the project gates need it (until project adapters get a native backend), and `./cc check` adds `nix flake check` when it is installed. The one-line installers set up Nix (in WSL on Windows). Docker or Podman is only needed for container workflows.
+Nix with flakes is an optional extra: `./cc build`, `run`, `relock`, `gc`, `eval` and the project gates need it (until project adapters get a native backend), and `./cc check` adds `nix flake check` when it is installed. The macOS and Linux installer sets up Nix; on Windows `install.ps1 -WithNix` sets it up in WSL. Docker or Podman is only needed for container workflows.
 
 **Without `cc-kit`:** clone this repo as `cc_template/` inside an empty folder (or one holding a CC in another format), open that folder in your AI tool and say: "Create a Control Center here. Read `cc_template/BOOTSTRAP.md`, treat `cc_template` as read-only and start grilling." AI tools don't find skills inside a nested clone, so the prompt has to name `BOOTSTRAP.md`. `cc-kit new` and `cc-kit migrate` do this for you.
 
@@ -107,7 +109,7 @@ Nix with flakes is an optional extra: `./cc build`, `run`, `relock`, `gc`, `eval
 
 | Feature | Where |
 |---|---|
-| Windows installer: asks for admin only for WSL, resumes after a reboot, adds `cc-kit` to PowerShell, creates the first CC | `install/windows/install.ps1` |
+| Windows installer: native by default (Git for Windows, Claude Code, the kit, `cc-kit` for PowerShell and cmd, the first CC), no WSL; `-WithNix` adds WSL and Nix, asks for admin only for WSL and resumes after a reboot | `install/windows/install.ps1`, `install/windows/cc-kit.ps1` |
 | macOS, Linux and WSL installer: Nix with flakes, systemd on WSL, the kit, Claude Code by default | `install/install.sh` |
 | `cc-kit`: `new` and `migrate` open your AI tool with the setup interview started, `open` continues an unfinished setup | `install/cc-kit` |
 | A CC that is not set up starts its own setup in every tool | `scripts/rule_hooks.py`, `AGENTS.md`, [decision 0018](docs/kit/decisions/0018-setup-starts-itself.md) |
