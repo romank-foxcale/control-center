@@ -13,6 +13,11 @@ case "$(uname -s)" in
   *) echo "cc: unsupported OS $(uname -s)" >&2; exit 1 ;;
 esac
 
+# A rule hook runs on every tool call. After a pull that moves the pin, the new uv is not downloaded yet: a hook then uses
+# a uv already here, so open sessions keep working; the next command outside a hook downloads the pinned one.
+if [ "${1:-}" = hook ] && [ ! -x "$uv" ]; then
+  for other in "$root"/.cc-local/tools/uv/*/"${uv##*/}"; do [ -x "$other" ] && uv=$other; done
+fi
 # A rule hook must answer within Claude Code's 15 s hook timeout. A first download of uv and Python takes longer, fails
 # there and starts again on every tool call, so a hook on a CC that is not set up refuses at once instead.
 if [ "${1:-}" = hook ] && { [ ! -x "$uv" ] || [ ! -f "$root/.cc-local/venvs/$os/pyvenv.cfg" ]; }; then

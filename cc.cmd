@@ -25,6 +25,9 @@ endlocal
 rem A rule hook must answer within Claude Code's 15 s hook timeout. A first download of uv and Python takes longer, fails
 rem there and starts again on every tool call, so a hook on a CC that is not set up refuses at once instead.
 if /i not "%~1"=="hook" goto ready
+rem A rule hook runs on every tool call. After a pull that moves the pin, the new uv is not downloaded yet: a hook then
+rem uses a uv already here, so open sessions keep working; the next command outside a hook downloads the pinned one.
+if not exist "%UV%" for /d %%d in ("%ROOT%\.cc-local\tools\uv\*") do if exist "%%d\uv.exe" set "UV=%%d\uv.exe"
 if not exist "%UV%" goto notready
 if exist "%VENV%\pyvenv.cfg" goto ready
 :notready

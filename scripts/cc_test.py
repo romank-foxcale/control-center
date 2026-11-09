@@ -193,6 +193,17 @@ class Shim(unittest.TestCase):
                     self.assertLess(elapsed, 5, "a hook that is not set up must answer at once (under 2 s locally)")
         self.assertEqual(sorted(path.name for path in (self.copy / ".cc-local").rglob("*")), ["tools", "uv"])
 
+    def test_a_hook_after_a_pin_update_uses_the_uv_already_here(self) -> None:
+        self.assertEqual(self.shim("help").returncode, 0)  # set the CC up with the pinned uv
+        shutil.copy2(ROOT / "scripts" / "hook_guard.py", self.copy / "scripts" / "hook_guard.py")
+        self.uv_dir.rename(self.uv_dir.parent / "0.0.1")  # a pull moved the pin; only the older uv is here
+        result = self.shim("hook", "pre-bash", stdin='{"tool_input": {"command": "ls"}}')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('"hookEventName": "PreToolUse"', result.stdout)  # the guard answered, not the shim
+        self.assertNotIn("not set up", result.stdout)
+        self.assertNotIn("downloading", result.stderr)
+        self.assertFalse(self.uv_dir.exists(), "a hook must never download uv")
+
     def test_a_user_uv_config_does_not_reach_the_cc(self) -> None:
         config = Path(self.temporary.name) / "config"
         (config / "uv").mkdir(parents=True)
