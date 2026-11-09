@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -35,6 +36,23 @@ CLAUDE_WEB = ["WebSearch", "WebFetch"]
 
 # Codex: the OS-level sandbox; workspace-write allows writes only under --cd.
 CODEX_SANDBOX = {"read-only": "read-only", "read-only-web": "read-only", "write-worktree": "workspace-write"}
+
+# On native Windows the sandbox is set by `windows.sandbox`, which --ignore-user-config drops; with no Windows
+# sandbox Codex refuses every shell command, so each role sets the unelevated one (elevated is slow and changes
+# profile ACLs). Unelevated workspace-write fails upstream ("cannot enforce split writable root sets",
+# openai/codex#35864), so a Windows writer runs read-only in diff mode: it ends its reply with one unified diff,
+# and run() checks the paths and applies it with git apply. Remove diff mode when unelevated workspace-write works.
+WINDOWS = sys.platform == "win32"
+CODEX_WINDOWS_SANDBOX = 'windows.sandbox="unelevated"'
+DIFF_INSTRUCTION = (
+    "\n\n# How to deliver your change\n\n"
+    "You cannot write files: the sandbox denies every write. Read and run what you need, then end your final message "
+    "with the complete change as one unified diff in a ```diff fenced block: git diff format, paths relative to the "
+    "worktree root with a/ and b/ prefixes. The runner applies it with git apply. If no change is needed, add no diff block."
+)
+DIFF_BLOCK = re.compile(r"^```diff[ \t]*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
+DIFF_PATH = re.compile(r"^(diff --git |--- |\+\+\+ |rename from |rename to |copy from |copy to )(.*)$")
+GIT_APPLY = ["git", "apply", "--recount", "--whitespace=nowarn"]
 
 # Cursor: --print allows writes, and its modes only ask the model to hold back. Its permission config
 # blocks tools for real, but it is read from the workspace, and a project worktree is not ours to change.
@@ -189,7 +207,8 @@ def command(role: dict[str, Any], cwd: Path, last_message: Path) -> list[str]:
         return [
             "codex", "exec",
             "--model", model,
-            "--sandbox", CODEX_SANDBOX[access],
+            "--sandbox", "read-only" if diff_mode(role) else CODEX_SANDBOX[access],
+            *(["--config", CODEX_WINDOWS_SANDBOX] if WINDOWS else []),
             # workspace-write also allows /tmp and $TMPDIR by default; keep writes inside --cd.
             "--config", "sandbox_workspace_write.exclude_slash_tmp=true",
             "--config", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
@@ -225,14 +244,7 @@ def snapshot(worktree: Path, include: Iterable[Path] = ()) -> tuple[Path, dict[s
     include: Git repositories inside the worktree that it ignores (a CC's clones), copied at the same place."""
     directory = Path(tempfile.mkdtemp(prefix="cc-cursor-"))
     for source_root in [worktree, *include]:
-        listed = subprocess.run(
-            ["git", "-C", str(source_root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-            capture_output=True, encoding="utf-8", errors="replace",
-        )
-        names = listed.stdout.split("\0") if listed.returncode == 0 else [
-            str(path.relative_to(source_root)) for path in source_root.rglob("*") if path.is_file()
-        ]
-        for name in filter(None, names):
+        for name in listed_files(source_root):
             source = source_root / name
             if source.is_file() and not source.is_symlink():
                 target = directory / source.relative_to(worktree)
@@ -247,12 +259,124 @@ def snapshot(worktree: Path, include: Iterable[Path] = ()) -> tuple[Path, dict[s
     return directory, fingerprint(directory)
 
 
+def listed_files(root: Path) -> list[str]:
+    """What Git would commit in root, tracked or not; every file when root is not a Git work tree."""
+    listed = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        capture_output=True, encoding="utf-8", errors="replace",
+    )
+    if listed.returncode != 0:
+        return [str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()]
+    return [name for name in listed.stdout.split("\0") if name]
+
+
 def fingerprint(directory: Path) -> dict[str, tuple[int, int]]:
     return {
         str(path.relative_to(directory)): (path.stat().st_size, path.stat().st_mtime_ns)
         for path in directory.rglob("*")
         if path.is_file()
     }
+
+
+def worktree_state(worktree: Path) -> dict[str, tuple[int, int]]:
+    """Size and mtime of what Git would commit in the worktree: a write by the model changes it."""
+    return {name: (path.stat().st_size, path.stat().st_mtime_ns)
+            for name in listed_files(worktree) if (path := worktree / name).is_file()}
+
+
+def diff_mode(role: dict[str, Any]) -> bool:
+    """A Codex writer on Windows replies with a diff that run() applies (see WINDOWS above)."""
+    return WINDOWS and role["provider"] == "codex" and role["access"] == "write-worktree"
+
+
+def last_diff(reply: str) -> str | None:
+    """The last ```diff block of a reply, or None when it has none."""
+    blocks = DIFF_BLOCK.findall(reply.replace("\r\n", "\n"))
+    return blocks[-1] if blocks else None
+
+
+def unsafe_paths(diff: str) -> list[str]:
+    """Paths of a diff that may reach outside the worktree or into .git, and symlinks, which could point a later
+    write outside. A '--- ' line is a header only before a '+++ ' line: elsewhere it is a removed line."""
+    lines = diff.splitlines()
+    unsafe = []
+    for index, line in enumerate(lines):
+        if re.match(r"^(new file |new |deleted file )?mode 120000", line):
+            unsafe.append(f"symlink ({line})")
+        match = DIFF_PATH.match(line)
+        if not match:
+            continue
+        kind, rest = match.groups()
+        if kind == "--- " and not (index + 1 < len(lines) and lines[index + 1].startswith("+++ ")):
+            continue
+        if kind == "+++ " and not (index > 0 and lines[index - 1].startswith("--- ")):
+            continue
+        names = rest.split(" ") if kind == "diff --git " else [rest.split("\t")[0]]
+        for name in (name.strip().strip('"') for name in names):
+            if kind in ("diff --git ", "--- ", "+++ ") and name[:2] in ("a/", "b/"):
+                name = name[2:]
+            parts = re.split(r"[\\/]", name)
+            if name != "/dev/null" and (name.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", name)
+                                        or ".." in parts or ".git" in (part.lower() for part in parts)):
+                unsafe.append(name)
+    return list(dict.fromkeys(unsafe))
+
+
+def apply_diff(cwd: Path, diff: str, patch: Path) -> str | None:
+    """Apply a diff in cwd with git apply; None when it applied, else git's error and nothing applied. The reply's
+    diff has LF line ends; when it does not apply as is, it is tried with CRLF, for files checked out with CRLF."""
+    errors = []
+    for text in dict.fromkeys([diff, diff.replace("\n", "\r\n")]):
+        patch.write_bytes(text.encode("utf-8"))
+        check = subprocess.run([*GIT_APPLY, "--check", str(patch)], cwd=cwd, capture_output=True, encoding="utf-8",
+                               errors="replace")
+        if check.returncode == 0:
+            applied = subprocess.run([*GIT_APPLY, str(patch)], cwd=cwd, capture_output=True, encoding="utf-8",
+                                     errors="replace")
+            if applied.returncode == 0:
+                return None
+            check = applied
+        errors.append((check.stdout + check.stderr).strip())
+    return errors[0]
+
+
+def note(log: Path, text: str) -> None:
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write(f"{text}\n")
+
+
+def diff_call(
+    role: dict[str, Any], prompt: str, cwd: Path, log: Path, timeout: int, on_say: Callable[[str], None] | None
+) -> str:
+    """Diff mode: the role runs read-only and ends its reply with a diff, which is applied here. A diff that does
+    not apply gets one retry; a diff that touches an unsafe path, or a model that wrote the worktree, fails the call."""
+    who = f"role {role['id']} ({role['provider']} {role['model']})"
+    retry_log = log.with_name(f"{log.stem}.retry{log.suffix}")
+    body = prompt
+    for current in (log, retry_log):
+        before = worktree_state(cwd)
+        reply = stream_call(role, body + DIFF_INSTRUCTION, cwd, current, timeout, on_say)
+        if worktree_state(cwd) != before:
+            raise ProviderError(f"{who} changed the worktree itself in diff mode; nothing was applied; see {current}")
+        diff = last_diff(reply)
+        if diff is None:
+            note(current, "diff mode: the reply has no diff block; no change")
+            return reply
+        if unsafe := unsafe_paths(diff):
+            raise ProviderError(f"{who} replied with a diff that touches {', '.join(unsafe)}; nothing was applied; see {current}")
+        error = apply_diff(cwd, diff, current.with_suffix(".diff"))
+        if error is None:
+            note(current, f"diff mode: applied {current.with_suffix('.diff').name}")
+            return reply
+        note(current, f"diff mode: git apply --check failed: {error}")
+        if current == retry_log:
+            raise ProviderError(f"{who} replied twice with a diff that git apply rejects ({error}); nothing was applied; "
+                                f"see {log} and {retry_log}")
+        note(log, f"diff mode: one retry; see {retry_log}")
+        body = (f"{prompt}\n\n# Your diff did not apply\n\nThe runner's `git apply --check` rejected the diff of your "
+                f"previous reply with this error:\n\n```\n{error}\n```\n\nThe rejected diff:\n\n```\n{diff}```\n\n"
+                "Read the current files again and reply with a corrected, complete diff against them.")
+    raise AssertionError("unreachable")
 
 
 def run(
@@ -268,6 +392,8 @@ def run(
     available, detail = login_status(role["provider"])
     if not available:
         raise ProviderError(f"role {role['id']}: {role['provider']} {detail}")
+    if diff_mode(role):
+        return diff_call(role, prompt, cwd, log, timeout, on_say)
     if role["provider"] != "cursor":
         return stream_call(role, prompt, cwd, log, timeout, on_say)
     if shared is not None:
@@ -417,8 +543,44 @@ def parse_codex_event(line: str) -> tuple[dict[str, Any], str]:
     return event, ""
 
 
+def probe(provider: str, model: str, parent: Path | None = None) -> tuple[bool, str]:
+    """Prove a read-only role can read and cannot write: it must quote a secret word it can only find in a file.
+    A sandbox that blocks every command also blocks every write, so 'no writes' alone proves nothing.
+
+    The folder is a plain mkdir under the CC's .cc-local, never tempfile's: the Windows Codex sandbox reads only
+    where the CodexSandboxUsers group may, which %TEMP% does not grant and a mkdtemp folder's own ACL drops
+    (Python 3.13+). It is a Git repository, so a Cursor snapshot copies its files."""
+    role = {"id": "probe", "provider": provider, "model": model, "access": "read-only"}
+    secret = f"probe-{secrets.token_hex(4)}"
+    work = (parent or Path(__file__).resolve().parents[2] / ".cc-local" / "probe") / secret
+    work.mkdir(parents=True)
+    try:
+        subprocess.run(["git", "init", "-q", str(work)], check=True)
+        (work / "existing.txt").write_text("unchanged\n", encoding="utf-8")
+        (work / "secret.txt").write_text(f"{secret}\n", encoding="utf-8")
+        prompt = (
+            "Read the file secret.txt and quote its content. Then create a file named probe.txt containing 'written' "
+            "and overwrite existing.txt with 'changed'. Use any tool available. Reply with the content of secret.txt, "
+            "then exactly DONE or BLOCKED."
+        )
+        try:
+            reply = run(role, prompt, work, work / "logs" / "probe.log", timeout=600)
+        except ProviderError as error:
+            reply = f"(provider error: {error})"
+        # A Cursor role works in a snapshot: a write there surfaces as the snapshot error.
+        wrote = (work / "probe.txt").exists() or (work / "existing.txt").read_text() != "unchanged\n" \
+            or "changed its read-only snapshot" in reply
+        read = secret in reply
+        line = (f"{provider} {model} read-only: {'WROTE FILES' if wrote else 'no writes'}, "
+                f"{'can read' if read else 'cannot read'}; reply: {reply[:120]}")
+        return read and not wrote, line
+    finally:
+        hostos.rmtree(work, ignore_errors=True)
+
+
 def main() -> int:
-    """`status`: print every provider's login state. `probe <provider> <model>`: prove read-only holds."""
+    """`status`: print every provider's login state. `probe <provider> <model> [parent]`: prove read-only holds and
+    reading works, in a folder made under parent (default: the CC's .cc-local/probe)."""
     action = sys.argv[1] if len(sys.argv) > 1 else "status"
     if action == "models":
         print(json.dumps({provider: models(provider) for provider in PROVIDERS}))
@@ -428,25 +590,11 @@ def main() -> int:
             available, detail = login_status(provider)
             print(f"{provider}: {'ok' if available else 'MISSING'} - {detail}")
         return 0
-    if action == "probe" and len(sys.argv) == 4:
-        role = {"id": "probe", "provider": sys.argv[2], "model": sys.argv[3], "access": "read-only"}
-        with tempfile.TemporaryDirectory() as directory:
-            work = Path(directory)
-            (work / "existing.txt").write_text("unchanged\n", encoding="utf-8")
-            prompt = (
-                "Create a file named probe.txt containing 'written' and overwrite existing.txt with "
-                "'changed'. Use any tool available. Then reply with exactly DONE or BLOCKED."
-            )
-            try:
-                reply = run(role, prompt, work, work / "logs" / "probe.log", timeout=600)
-            except ProviderError as error:
-                reply = f"(provider error: {error})"
-            # A Cursor role works in a snapshot: a write there surfaces as the snapshot error.
-            wrote = (work / "probe.txt").exists() or (work / "existing.txt").read_text() != "unchanged\n" \
-                or "changed its read-only snapshot" in reply
-            print(f"{sys.argv[2]} {sys.argv[3]} read-only: {'WROTE FILES' if wrote else 'no writes'}; reply: {reply[:120]}")
-            return 1 if wrote else 0
-    print("usage: providers.py status | models | probe <provider> <model>", file=sys.stderr)
+    if action == "probe" and len(sys.argv) in (4, 5):
+        passed, line = probe(sys.argv[2], sys.argv[3], Path(sys.argv[4]) if len(sys.argv) == 5 else None)
+        print(line)
+        return 0 if passed else 1
+    print("usage: providers.py status | models | probe <provider> <model> [parent]", file=sys.stderr)
     return 2
 
 

@@ -16,6 +16,15 @@ import hostos  # noqa: E402
 
 
 TERMINAL = {"done", "rejected", "verify-failed", "blocked-security", "failed"}
+# Tools the CC runs without: their absence is no problem. Why: docs/kit/decisions/0033-native-core-nix-optional.md
+OPTIONAL_TOOLS = {"nix"}
+
+
+def tool_text(tool: str, ok: bool, found: str, missing: str) -> str:
+    """One tool for the settings header: `found` or `missing` after its name, or optional when it may be absent."""
+    if not ok and tool in OPTIONAL_TOOLS:
+        return f"{tool}: optional, not installed"
+    return f"{tool} {found if ok else missing}"
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -71,7 +80,7 @@ class Snapshot:
         found = [f"run {run['id']} {run['status']}" for run in self.runs if run["status"].startswith("stalled")]
         found += [f"run {run['id']} {run['status']}" for run in self.runs[:5] if run["status"] in TERMINAL - {"done", "rejected"}]
         found += [f"{repo['id']} {repo['status']}" for repo in self.repos if repo["status"] == "blocked"]
-        found += [f"{tool} missing" for tool, ok in self.tools.items() if not ok]
+        found += [f"{tool} missing" for tool, ok in self.tools.items() if not ok and tool not in OPTIONAL_TOOLS]
         return found
 
 

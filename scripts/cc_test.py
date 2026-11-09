@@ -17,10 +17,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cc  # noqa: E402
+import hostos  # noqa: E402
+import rule_hooks  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 WINDOWS = os.name == "nt"
-# Every command of the bash ./cc this CLI replaces (plan native-core, W1).
+# Every command of the bash ./cc this CLI replaces (docs/kit/decisions/0033-native-core-nix-optional.md).
 COMMANDS = ["doctor", "backup", "data", "relock", "gc", "show", "check", "build", "run", "verify", "validate", "agents", "hook",
             "bootstrap", "repo", "prs", "worktree", "migrate-layout", "trello", "open", "watch", "council", "eval",
             "settings", "plan", "feature"]
@@ -136,6 +138,99 @@ class Doctor(unittest.TestCase):
 
     def test_uv_is_found(self) -> None:
         self.assertIsNotNone(cc.uv_binary(), "the shim ran this test through uv")
+
+    def doctor(self, claude: tuple[int, ...] | None, tools: tuple[str, ...] = ("git", "claude"), onedrive: bool = False
+               ) -> tuple[int, str]:
+        """cc doctor with only `tools` on PATH, Git Bash present, the CC in OneDrive or not, and no sub-scripts."""
+        with mock.patch.object(cc.shutil, "which", side_effect=lambda name: name if name in tools else None), \
+                mock.patch.object(hostos, "resolve_exe", side_effect=lambda name: name if name in tools else None), \
+                mock.patch.object(rule_hooks, "claude_version", return_value=claude), \
+                mock.patch.object(cc, "uv_binary", return_value=None), mock.patch.object(cc, "git_bash", return_value=True), \
+                mock.patch.object(cc, "in_onedrive", return_value=onedrive), mock.patch.object(cc, "script", return_value=0), \
+                mock.patch.object(cc.subprocess, "run",
+                                  return_value=subprocess.CompletedProcess([], 1, stdout="git version 2.50.0\n")):
+            code, out, _ = run("doctor")
+        return code, out
+
+    def test_doctor_exits_0_without_an_error_line(self) -> None:
+        code, out = self.doctor((2, 1, 318))
+        self.assertNotIn("error:", out)
+        self.assertEqual(code, 0, out)
+        self.assertIn("claude 2.1.318", out)
+
+    def test_doctor_exits_1_when_it_printed_an_error_line(self) -> None:
+        code, out = self.doctor((2, 1, 318), tools=("claude",))
+        self.assertIn("error: git is missing", out)
+        self.assertEqual(code, 1, out)
+
+    def test_a_claude_code_too_old_for_fail_closed_hooks_is_an_error(self) -> None:
+        code, out = self.doctor((2, 1, 294))
+        self.assertIn("error: Claude Code 2.1.294 is older than 2.1.295", out)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.doctor((2, 1, 295))[0], 0, "2.1.295 is the first version that blocks on a failed hook")
+
+    def test_a_missing_claude_is_only_a_note(self) -> None:
+        code, out = self.doctor(None, tools=("git",))
+        self.assertIn("note: Claude Code is not found", out)
+        self.assertEqual(code, 0, out)
+
+    def test_an_unreadable_claude_version_is_a_warning(self) -> None:
+        code, out = self.doctor(None)
+        self.assertIn("warning: cannot read the Claude Code version", out)
+        self.assertEqual(code, 0, out)
+
+    def test_the_claude_version_is_parsed_from_its_output(self) -> None:
+        answer = subprocess.CompletedProcess([], 0, stdout="2.1.318 (Claude Code)\n")
+        with mock.patch.object(rule_hooks.hostos, "resolve_exe", return_value="claude"), \
+                mock.patch.object(rule_hooks.subprocess, "run", return_value=answer):
+            self.assertEqual(rule_hooks.claude_version(), (2, 1, 318))
+        self.assertLess((2, 1, 294), rule_hooks.FAIL_CLOSED_CLAUDE)
+        self.assertGreaterEqual((2, 1, 295), rule_hooks.FAIL_CLOSED_CLAUDE)
+        self.assertGreaterEqual((2, 2, 0), rule_hooks.FAIL_CLOSED_CLAUDE)
+
+    def test_a_cc_inside_onedrive_is_found(self) -> None:
+        base = Path("/home/me")
+        self.assertTrue(cc.in_onedrive(base / "Sync" / "cc", {"OneDriveCommercial": str(base / "Sync")}))
+        self.assertTrue(cc.in_onedrive(base / "OneDrive - Foxcale" / "code" / "cc", {}))
+        self.assertTrue(cc.in_onedrive(base / "onedrive" / "cc", {}))
+        self.assertFalse(cc.in_onedrive(base / "code" / "cc", {"OneDrive": str(base / "OneDrive")}))
+        self.assertFalse(cc.in_onedrive(base / "SyncOther" / "cc", {"OneDriveConsumer": str(base / "Sync"), "OneDrive": ""}))
+
+    def test_doctor_warns_for_a_cc_inside_onedrive(self) -> None:
+        code, out = self.doctor((2, 1, 318), onedrive=True)
+        self.assertIn("warning: this CC is inside OneDrive", out)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("OneDrive", self.doctor((2, 1, 318))[1])
+
+
+class Check(unittest.TestCase):
+    def stamp(self, nix: str | None) -> mock.MagicMock:
+        import checks
+        import verified
+        import verify
+        with mock.patch.object(checks, "main", return_value=0), \
+                mock.patch.object(verify, "tree_snapshot", return_value={cc.ROOT: "tree"}), \
+                mock.patch.object(hostos, "resolve_exe", side_effect=lambda name: nix if name == "nix" else name), \
+                mock.patch.object(verified, "record") as record, mock.patch.object(cc.subprocess, "run"):
+            self.assertEqual(cc.check([]), 0)
+        return record
+
+    def test_a_pass_with_nix_stamps_the_nix_part_as_run(self) -> None:
+        self.stamp("nix").assert_called_once_with(cc.ROOT, cc.ROOT, "check", tree="tree", nix=True)
+
+    def test_a_pass_without_nix_stamps_the_nix_part_as_not_run(self) -> None:
+        self.stamp(None).assert_called_once_with(cc.ROOT, cc.ROOT, "check", tree="tree", nix=False)
+
+
+class Council(unittest.TestCase):
+    def test_status_outside_a_control_center_says_so(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "council" / "run.py"), directory, "status"],
+                                    capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("not a Control Center yet: run ./cc bootstrap install", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("No such file", result.stderr)
 
 
 class Forwarding(unittest.TestCase):

@@ -40,6 +40,35 @@ jobs:
           name: summary-${{ matrix.os }}
           path: ${{ runner.temp }}/summary-${{ matrix.os }}.json
           if-no-files-found: error
+      # The steps below run after ./cc check has written and uploaded its summary, so scripts/ci_compare.py never
+      # sees them. They use the uv, Python and venv that ./cc check put in .cc-local; the runner's Python is not used.
+      - name: hook launch test
+        # Each rule hook of .claude/settings.json, launched as Claude Code does (sh -c, Git Bash on Windows), must deny
+        # or ask within 5 s.
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) python=.cc-local/venvs/windows/Scripts/python.exe ;;
+            macOS) python=.cc-local/venvs/macos/bin/python ;;
+            *) python=.cc-local/venvs/linux/bin/python ;;
+          esac
+          "$python" -B scripts/hook_launch_test.py
+      - name: materialized CC keeps cc executable
+        # On Windows git init sets core.filemode=false; the materialized CC must still record cc as 100755, or ./cc
+        # and every hook fail with "Permission denied" in a macOS or Linux clone.
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          target="$RUNNER_TEMP/materialized-cc"
+          .cc-local/venvs/windows/Scripts/python.exe -B scripts/materialize-template.py "$target"
+          git -C "$target" add -A
+          git -C "$target" -c user.name=ci -c user.email=ci@example.invalid commit -q -m "Materialize the CC"
+          mode=$(git -C "$target" ls-files -s cc)
+          echo "$mode"
+          case "$mode" in
+            100755\ *) ;;
+            *) echo "cc is not committed as 100755 in the materialized CC" >&2; exit 1 ;;
+          esac
 
   same-tests:
     # Every OS must run the same tests; a skip outside scripts/ci_compare.py's EXPECTED_SKIPS fails here.

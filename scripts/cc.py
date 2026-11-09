@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The CC's command line, on Windows, macOS and Linux. The cc / cc.cmd shims run it with the pinned Python from
-uv.lock (plan native-core). Every command keeps the name, arguments and exit codes of the former bash ./cc.
+uv.lock (docs/kit/decisions/0033-native-core-nix-optional.md). Every command keeps the name, arguments and exit
+codes of the former bash ./cc.
 
 check, verify and show run natively and add their Nix part when Nix is installed. build, run, relock, gc and eval
 belong to the optional Nix extra and fail with a clear message without it. The command x OS table is in
@@ -121,7 +122,7 @@ def target(arguments: list[str], command: str) -> tuple[str, list[str]]:
 
 
 def git_bash(git: str | None) -> bool:
-    """Claude Code runs the rule hooks in Git Bash on Windows (plans/evidence/native-core/s2-hooks.md)."""
+    """Claude Code runs the rule hooks in Git Bash on Windows (docs/kit/decisions/0033-native-core-nix-optional.md)."""
     candidates = [os.environ.get("CLAUDE_CODE_GIT_BASH_PATH", ""),
                   str(Path(os.environ.get("ProgramFiles", r"C:\Program Files"), "Git", "bin", "bash.exe"))]
     if git:  # <Git>\cmd\git.exe or <Git>\mingw64\bin\git.exe
@@ -144,43 +145,81 @@ def wsl_on_windows_drive(root: Path = ROOT) -> bool:
     return sys.platform == "linux" and "microsoft" in platform.release().lower() and root.parts[1:2] == ("mnt",)
 
 
+def in_onedrive(root: Path, environ: dict[str, str] | os._Environ[str]) -> bool:
+    """A CC inside a OneDrive folder: sync locks and placeholder files break git, the venv and the hooks."""
+    folders = [environ.get(name, "") for name in ("OneDrive", "OneDriveCommercial", "OneDriveConsumer")]
+    path = os.path.normcase(str(root))
+    for folder in filter(None, folders):
+        folder = os.path.normcase(str(Path(folder)))
+        if path == folder or path.startswith(folder.rstrip("\\/") + os.sep):
+            return True
+    return any(part.lower().startswith("onedrive") for part in root.parts)
+
+
+def claude_line() -> str:
+    """The Claude Code version, or why it is not known. Fail-closed hooks need FAIL_CLOSED_CLAUDE or later."""
+    import hostos
+    import rule_hooks
+
+    if hostos.resolve_exe("claude") is None:
+        return "note: Claude Code is not found; the CC's rule hooks run only in Claude Code"
+    version = rule_hooks.claude_version()
+    if version is None:
+        return "warning: cannot read the Claude Code version (claude --version)"
+    text, minimum = ".".join(map(str, version)), ".".join(map(str, rule_hooks.FAIL_CLOSED_CLAUDE))
+    if version < rule_hooks.FAIL_CLOSED_CLAUDE:
+        return (f"error: Claude Code {text} is older than {minimum}; the CC's hooks need onFailure: block, so update "
+                "Claude Code")
+    return f"claude {text}"
+
+
 def doctor(arguments: list[str]) -> int:
     # Read-only, and never locks the flake. Why: docs/kit/decisions/0030-disk-management.md
     if arguments[:1] == ["--disk"]:
         return script("disk.py")
-    sys.stdout.reconfigure(line_buffering=True)  # keep this order with the output of the scripts called below
+    lines: list[str] = []
+
+    def say(line: str) -> None:
+        lines.append(line)
+        print(line)
+
     uv = uv_binary()
-    print(subprocess.run([uv, "--version"], capture_output=True, text=True).stdout.strip() if uv
-          else "warning: uv is not found; run the CC through ./cc or cc.cmd, which install the pinned uv")
-    print(f"python {platform.python_version()} ({sys.executable})")
+    say(subprocess.run([uv, "--version"], capture_output=True, text=True).stdout.strip() if uv
+        else "warning: uv is not found; run the CC through ./cc or cc.cmd, which install the pinned uv")
+    say(f"python {platform.python_version()} ({sys.executable})")
     if wsl_on_windows_drive():
-        print("warning: this CC is on a Windows drive and runs in WSL; a rule hook takes longer than its 15 s timeout "
-              "here, so Claude Code blocks every tool call. Use cc.cmd on Windows, or clone the CC inside WSL (~/...).")
+        say("warning: this CC is on a Windows drive and runs in WSL; a rule hook takes longer than its 15 s timeout "
+            "here, so Claude Code blocks every tool call. Use cc.cmd on Windows, or clone the CC inside WSL (~/...).")
+    if in_onedrive(ROOT, os.environ):
+        say(f"warning: this CC is inside OneDrive ({ROOT}); syncing locks and replaces files under git, the venv and "
+            "the hooks. Move the CC to a folder that OneDrive does not sync.")
     git = shutil.which("git")
-    print(subprocess.run([git, "--version"], capture_output=True, text=True).stdout.strip() if git
-          else "error: git is missing; the CC needs it")
+    say(subprocess.run([git, "--version"], capture_output=True, text=True).stdout.strip() if git
+        else "error: git is missing; the CC needs it")
     if os.name == "nt" and not git_bash(git):
-        print("error: Git for Windows (Git Bash) is missing; the rule hooks need it")
+        say("error: Git for Windows (Git Bash) is missing; the rule hooks need it")
+    say(claude_line())
     found = shutil.which("nix")
     version = subprocess.run([found, "--version"], capture_output=True, text=True).stdout.strip() if found else ""
-    print(version or "note: Nix is absent; the optional Nix extra (build, run, relock, gc, Nix gates) is unavailable")
+    say(version or "note: Nix is absent; the optional Nix extra (build, run, relock, gc, Nix gates) is unavailable")
     if old_nix(version):
-        print(f"warning: {version} is older than {'.'.join(map(str, MINIMUM_NIX))}, the oldest Nix tested with the "
-              "placeholder input of a repo with no remote (docs/kit/decisions/0034-new-project-cc.md); update Nix")
+        say(f"warning: {version} is older than {'.'.join(map(str, MINIMUM_NIX))}, the oldest Nix tested with the "
+            "placeholder input of a repo with no remote (docs/kit/decisions/0034-new-project-cc.md); update Nix")
     if docker := shutil.which("docker") or shutil.which("podman"):
-        print(subprocess.run([docker, "--version"], capture_output=True, text=True).stdout.strip())
+        say(subprocess.run([docker, "--version"], capture_output=True, text=True).stdout.strip())
     else:
-        print("note: Docker/Podman is absent; container E2E apps will be unavailable")
+        say("note: Docker/Podman is absent; container E2E apps will be unavailable")
     gh = shutil.which("gh")
     if gh and subprocess.run([gh, "auth", "status"], capture_output=True).returncode == 0:
-        print("gh: logged in")
+        say("gh: logged in")
     else:
-        print("note: gh is missing or not logged in; ./cc prs will be unavailable")
+        say("note: gh is missing or not logged in; ./cc prs will be unavailable")
+    sys.stdout.flush()  # keep this order with the output of the scripts called below
     script("council/providers.py", "status", root=False)
     script("repositories.py", "strays")
     if (ROOT / "control-center.json").is_file():
         script("repositories.py", "attention")
-    return 0
+    return 1 if any(line.startswith("error:") for line in lines) else 0
 
 
 MINIMUM_NIX = (2, 28)
@@ -193,13 +232,17 @@ def old_nix(version: str) -> bool:
 
 
 def check(arguments: list[str]) -> int:
-    # The native check groups, then nix flake check as an optional extra that gets the arguments. Why: plan native-core
+    # The native check groups, then nix flake check as an optional extra that gets the arguments.
+    # Why: docs/kit/decisions/0033-native-core-nix-optional.md
     import checks
+    import hostos
+    import verified
     import verify
 
     started = verify.tree_snapshot([ROOT])
     status = checks.main(arguments, ROOT)
-    # A pass stamps the CC's tree, which the push hook looks for, only if no file changed during the run.
+    # A pass stamps the CC's tree, which the push hook looks for, only if no file changed during the run. The stamp
+    # says whether the Nix part ran: a pass with Nix installed includes a passing nix flake check.
     # Why: docs/kit/decisions/0028-verify-before-push.md
     if status == 0:
         tree = verify.tree_snapshot([ROOT])[ROOT]
@@ -207,7 +250,10 @@ def check(arguments: list[str]) -> int:
             print("warning: no check stamp: files changed while check ran (or the tree cannot be read); run it again",
                   file=sys.stderr)
         else:
-            script("verified.py", "record", str(ROOT), "check")
+            try:
+                verified.record(ROOT, ROOT, "check", tree=tree, nix=hostos.resolve_exe("nix") is not None)
+            except (OSError, subprocess.CalledProcessError) as error:
+                print(f"warning: no check stamp for {ROOT}: {error}", file=sys.stderr)
     # Notes whose evidence changed after verified_at: a warning, never a failure.
     # Why: docs/kit/decisions/0023-stale-evidence-warning.md
     subprocess.run([sys.executable, str(SCRIPTS / "validate-knowledge.py"), "--stale", str(ROOT)])
