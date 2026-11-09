@@ -53,7 +53,7 @@ class Surface(unittest.TestCase):
         with mock.patch.object(cc, "script", return_value=0), mock.patch.object(cc, "nix", return_value=0), \
                 mock.patch.object(cc, "require_nix", return_value="nix"), mock.patch.object(cc, "lock_flake"), \
                 mock.patch.object(cc, "doctor", return_value=0), mock.patch.object(cc, "check", return_value=0), \
-                mock.patch.object(cc, "feature_overrides", return_value=[]):
+                mock.patch.object(cc, "source_overrides", return_value=[]):
             for command in COMMANDS:
                 code, _, err = run(command, "validate" if command == "bootstrap" else "x", "show")
                 self.assertNotIn("unknown command", err, command)

@@ -42,10 +42,9 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def override_args(root: Path, feature: str | None) -> list[str]:
-    if not feature:
-        return []
+    """worktrees.py source_overrides: base clones of repos with no remote, then the feature's worktrees."""
     result = subprocess.run(
-        [sys.executable, str(root / "scripts" / "worktrees.py"), str(root), "nix-args", feature],
+        [sys.executable, str(root / "scripts" / "worktrees.py"), str(root), "nix-args", *([feature] if feature else [])],
         check=True,
         capture_output=True,
         text=True,

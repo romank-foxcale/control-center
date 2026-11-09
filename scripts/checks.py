@@ -70,7 +70,7 @@ def registry(root: Path = ROOT) -> list[Group]:
         Group("events", [("scripts/events_test.py",), ("scripts/verify_test.py",)]),
         Group("repositories", [(f"scripts/{name}_test.py",) for name in (
             "repositories", "migrate_layout", "validate_control_center", "disk", "store_gc", "backup", "backup_where",
-            "data", "relock", "plans")]),
+            "data", "relock", "plans", "worktrees")]),
         Group("prs", [("scripts/prs_test.py",), ("scripts/threads_test.py",), ("scripts/lessons_test.py",)]),
         Group("eval", [("scripts/eval/eval_test.py",)]),
         Group("settings-smoke", [("scripts/settings/smoke.py",)]),
@@ -144,7 +144,7 @@ def nix_extra(arguments: list[str], root: Path = ROOT) -> Result:
 
     try:
         cc.lock_flake(nix)
-        overrides = cc.feature_overrides()
+        overrides = cc.source_overrides()
     except subprocess.CalledProcessError as error:
         return Result("nix extra", "FAIL", time.monotonic() - started, f"{error}\n")
     completed = subprocess.run([nix, "flake", "check", *overrides, str(root), "--keep-going", *arguments],
