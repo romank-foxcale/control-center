@@ -184,7 +184,14 @@ if [[ ${#existing[@]} -eq 0 && -z "${CC_KIT_NO_FIRST:-}" ]] && { : </dev/tty; } 
   first_name=""
   read -r first_name </dev/tty || true
   if [[ -n "$first_name" ]]; then
-    exec "$kit_dir/install/cc-kit" new "$first_name" </dev/tty
+    # macOS kqueue rejects /dev/tty (EINVAL), which crashes Claude Code (Bun) at start. Under curl | bash stdout is
+    # still the terminal, so give the tool that device (/dev/ttys003) instead; fd 3 carries it past $( ).
+    terminal=/dev/tty
+    if [[ "$os" == Darwin ]] && ! { terminal="$(tty <&3 2>/dev/null)"; } 3>&1; then
+      printf '\nDone. Open a new terminal and run:\n    cc-kit new %s\n' "$first_name"
+      exit 0
+    fi
+    exec "$kit_dir/install/cc-kit" new "$first_name" <"$terminal"
   fi
 fi
 
