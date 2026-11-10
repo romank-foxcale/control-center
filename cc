@@ -53,6 +53,7 @@ lock_flake() {
   nix flake lock "$cc_root" --quiet
 }
 
+# Expanded as ${nix_override_args[@]+"..."}: bash 3.2 (the macOS default) treats an empty array as unset under set -u.
 nix_override_args=()
 # Every Nix call gets the same source overrides: the base clone of each repo with no remote yet (./cc repo new), then
 # the worktrees of CC_FEATURE, which win. Why: docs/kit/decisions/0031-new-project-cc.md
@@ -124,14 +125,14 @@ case "$command_name" in
     require_nix
     lock_flake
     load_feature_overrides
-    exec nix flake show "${nix_override_args[@]}" "$cc_root" "$@"
+    exec nix flake show ${nix_override_args[@]+"${nix_override_args[@]}"} "$cc_root" "$@"
     ;;
   check)
     require_nix
     lock_flake
     load_feature_overrides
     status=0
-    nix flake check "${nix_override_args[@]}" "$cc_root" --keep-going "$@" || status=$?
+    nix flake check ${nix_override_args[@]+"${nix_override_args[@]}"} "$cc_root" --keep-going "$@" || status=$?
     # A pass stamps the CC's tree, which the push hook looks for. Why: docs/kit/decisions/0028-verify-before-push.md
     if [[ "$status" -eq 0 ]] && command -v python3 >/dev/null; then
       python3 "$cc_root/scripts/verified.py" "$cc_root" record "$cc_root" check
@@ -149,7 +150,7 @@ case "$command_name" in
     target="${1:?usage: ./cc build <name>}"
     shift
     load_feature_overrides
-    exec nix build "${nix_override_args[@]}" "${cc_root}#$target" "$@"
+    exec nix build ${nix_override_args[@]+"${nix_override_args[@]}"} "${cc_root}#$target" "$@"
     ;;
   run)
     require_nix
@@ -157,7 +158,7 @@ case "$command_name" in
     target="${1:?usage: ./cc run <name>}"
     shift
     load_feature_overrides
-    exec nix run "${nix_override_args[@]}" "${cc_root}#$target" -- "$@"
+    exec nix run ${nix_override_args[@]+"${nix_override_args[@]}"} "${cc_root}#$target" -- "$@"
     ;;
   verify)
     require_nix
