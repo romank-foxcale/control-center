@@ -29,7 +29,7 @@ Ask what to do, again as a choice question:
 |---|---|
 | Review it | Follow `cc-review`: only `[BREAK]`, `[SCOPE]` and `[KNOWLEDGE]` findings, or a CLEAN verdict with what was checked. Findings stay in the chat. |
 | Judge the comments | Follow `cc-threads`: two anonymous sceptics judge each comment waiting on the user, or each reply to the user's comments, against the code. Verdicts and drafted replies stay in the chat. Offer this first when the PR's `threads` field is set. |
-| Summarize it | Run `./cc prs show <repo> <number> --diff` and explain what changes and why, in a few lines. |
+| Summarize it | Small PR: run `./cc prs show <repo> <number> --diff` and explain what changes and why, in a few lines. Big PR, or the user wants a page: follow `cc-changes`. |
 | Check it out | `./cc prs checkout <repo> <number>`: the PR head as feature `pr-<repo>-<number>`, to run its gates or try it. Running it again follows the PR's latest push. |
 | Nothing now | Stop. |
 

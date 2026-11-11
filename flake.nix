@@ -108,6 +108,7 @@
                 ${pkgs.python3}/bin/python ${self}/scripts/prs_test.py
                 ${pkgs.python3}/bin/python -B ${self}/scripts/threads_test.py
                 ${pkgs.python3}/bin/python -B ${self}/scripts/lessons_test.py
+                ${pkgs.python3}/bin/python -B ${self}/scripts/changes_test.py
                 touch "$out"
               '';
               eval = pkgs.runCommand "control-center-eval" { nativeBuildInputs = [ pkgs.git ]; } ''

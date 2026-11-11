@@ -32,6 +32,7 @@ relations:
   - docs/kit/decisions/0029-risk-council.md
   - docs/kit/decisions/0030-disk-management.md
   - docs/kit/decisions/0031-new-project-cc.md
+  - docs/kit/decisions/0032-change-maps.md
 ---
 
 # Kit knowledge map
@@ -86,3 +87,4 @@ This folder belongs to the kit. A CC never edits it: to change kit behaviour for
 - [A change to architecture, dependencies, runtime, data or deployment gets a risk council before it is planned](decisions/0029-risk-council.md)
 - [A CC shows where its disk space goes and frees Nix space without touching CC state](decisions/0030-disk-management.md)
 - [A CC can start a new project whose repos do not exist yet](decisions/0031-new-project-cc.md)
+- [A PR is explained as a change map that an agent fills as data into a fixed template](decisions/0032-change-maps.md)
