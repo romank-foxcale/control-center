@@ -1,0 +1,170 @@
+<!doctype html>
+<!-- Fixed change-map template: scripts/changes.py replaces the DATA marker with the facts and the map.
+     Never generated per PR. Loads nothing from the network. Why: docs/kit/decisions/0032-change-maps.md -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Change map</title>
+<style>
+:root {
+  --bg: #fbfbfa; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e4e2dc;
+  --accent: #2f5fd0; --add: #1f7a3a; --del: #b4262a; --warn-bg: #fff6e0; --warn-ink: #7a5300; --chip: #f1f0ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --panel: #1f1f1d; --ink: #ecebe6; --muted: #a3a29c; --line: #34332f;
+    --accent: #8aa9ff; --add: #6fd18d; --del: #ff8a8a; --warn-bg: #3a2f14; --warn-ink: #ffd27a; --chip: #2a2a27;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 28px 16px 64px; }
+h1 { font-size: 22px; line-height: 1.3; margin: 0 0 6px; }
+h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 32px 0 10px; }
+a { color: var(--accent); }
+code, .mono { font: 13px/1.45 ui-monospace, "Cascadia Code", Consolas, monospace; }
+.meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.add { color: var(--add); } .del { color: var(--del); }
+.intent { font-size: 17px; margin: 18px 0 0; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin: 14px 0 6px; background: var(--line); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; }
+details { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin: 0 0 10px; }
+summary { cursor: pointer; padding: 12px 16px; display: flex; gap: 12px; align-items: baseline; list-style: none; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: "▸"; color: var(--muted); }
+details[open] > summary::before { content: "▾"; }
+summary .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+summary .t { font-weight: 600; flex: 1; }
+.body { padding: 0 16px 14px 40px; }
+.why { margin: 0 0 10px; }
+ul.files { list-style: none; padding: 0; margin: 0 0 12px; }
+ul.files li { display: flex; gap: 10px; padding: 2px 0; flex-wrap: wrap; }
+.chip { font-size: 12px; padding: 0 7px; border-radius: 9px; background: var(--chip); color: var(--muted); }
+.chip.moved { background: var(--warn-bg); color: var(--warn-ink); }
+.syms { color: var(--muted); font-size: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 6px 10px; border-top: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+ol.order { margin: 0; padding-left: 22px; }
+ol.order li { padding: 2px 0; }
+.risk { padding: 10px 14px; border-radius: 8px; background: var(--warn-bg); color: var(--warn-ink); margin: 0 0 8px; }
+.risk code { color: inherit; font-weight: 600; }
+.diagram { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
+.noise li, .tests li { color: var(--muted); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.cols > div { min-width: 0; }
+code, .tests li, td { overflow-wrap: anywhere; }
+.empty { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script id="data" type="application/json">/*__DATA__*/null</script>
+<script>
+(function () {
+  "use strict";
+  var raw = document.getElementById("data").textContent;
+  var data = JSON.parse(raw === "/*__DATA__*/null" ? "null" : raw);
+  var app = document.getElementById("app");
+  if (!data) { app.textContent = "No data: render this page with ./cc changes render."; return; }
+  var facts = data.facts, map = data.map, reclass = map.reclass || {};
+  var COLORS = { source: "#2f5fd0", config: "#8a5cd6", test: "#1f9a5a", docs: "#c98a1a", generated: "#9a9a94" };
+  var byPath = {};
+  facts.files.forEach(function (f) { f.cls = reclass[f.path] || f["class"]; f.moved = !!reclass[f.path]; byPath[f.path] = f; });
+
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (k) { if (k === "text") node.textContent = attrs[k]; else node.setAttribute(k, attrs[k]); });
+    (children || []).forEach(function (c) { if (c) node.appendChild(typeof c === "string" ? document.createTextNode(c) : c); });
+    return node;
+  }
+  function delta(a, d) { return el("span", { "class": "mono" }, [el("span", { "class": "add", text: "+" + a }), " ", el("span", { "class": "del", text: "-" + d })]); }
+  function fileRow(f) {
+    var syms = [].concat(f.symbols.added.map(function (s) { return "+" + s; }), f.symbols.removed.map(function (s) { return "-" + s; }));
+    return el("li", {}, [
+      el("code", { text: f.path }), delta(f.additions, f.deletions),
+      el("span", { "class": "chip" + (f.moved ? " moved" : ""), text: f.moved ? f["class"] + " → " + f.cls : f.cls }),
+      f.status !== "modified" ? el("span", { "class": "chip", text: f.status }) : null,
+      syms.length ? el("span", { "class": "syms mono", text: syms.slice(0, 8).join(" ") + (syms.length > 8 ? " …" : "") }) : null
+    ]);
+  }
+  function section(title, nodes) { return [el("h2", { text: title })].concat(nodes); }
+  function add(nodes) { nodes.forEach(function (n) { if (n) app.appendChild(n); }); }
+
+  document.title = facts.repo + " #" + facts.number + " · change map";
+  add([
+    el("h1", {}, [facts.title + " ", el("a", { href: facts.url, text: "#" + facts.number })]),
+    el("div", { "class": "meta" }, [
+      el("span", { text: facts.repo }), el("span", { "class": "mono", text: facts.base + " ← " + facts.head }),
+      el("span", { text: facts.files.length + " files" }), delta(facts.additions, facts.deletions),
+      el("span", { text: facts.commits.length + " commits" })
+    ]),
+    el("p", { "class": "intent", text: map.intent })
+  ]);
+
+  var totals = {}, all = 0;
+  facts.files.forEach(function (f) { var n = f.additions + f.deletions; totals[f.cls] = (totals[f.cls] || 0) + n; all += n; });
+  var bar = el("div", { "class": "bar" }), legend = el("div", { "class": "legend" });
+  Object.keys(COLORS).forEach(function (c) {
+    if (!totals[c]) return;
+    bar.appendChild(el("span", { style: "width:" + (100 * totals[c] / all) + "%;background:" + COLORS[c], title: c }));
+    legend.appendChild(el("span", {}, [el("span", { "class": "dot", style: "background:" + COLORS[c] }), c + " " + Math.round(100 * totals[c] / all) + "%"]));
+  });
+  add([bar, legend]);
+
+  if (map.diagram) {
+    var box = el("div", { "class": "diagram" });
+    add(section("Structure", [box]));
+    var script = document.createElement("script");
+    script.src = "../vendor/mermaid.min.js";
+    script.onload = function () {
+      var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "neutral" });
+      window.mermaid.render("cm-diagram", map.diagram).then(function (r) { box.innerHTML = r.svg; },
+        function (e) { box.appendChild(el("pre", { "class": "mono", text: "Diagram error: " + e.message + "\n\n" + map.diagram })); });
+    };
+    script.onerror = function () { box.appendChild(el("pre", { "class": "mono", text: map.diagram })); };
+    document.body.appendChild(script);
+  }
+
+  add(section("Changes by concern", map.groups.map(function (g, i) {
+    var a = 0, d = 0;
+    g.files.forEach(function (p) { a += byPath[p].additions; d += byPath[p].deletions; });
+    var rows = (g.before_after || []).map(function (r) { return el("tr", {}, [el("td", { text: r["case"] }), el("td", { text: r.before }), el("td", { text: r.after })]); });
+    return el("details", i === 0 ? { open: "" } : {}, [
+      el("summary", {}, [el("span", { "class": "n", text: String(i + 1) }), el("span", { "class": "t", text: g.title }),
+        el("span", { "class": "n", text: g.files.length + " files" }), delta(a, d)]),
+      el("div", { "class": "body" }, [
+        el("p", { "class": "why", text: g.why }),
+        el("ul", { "class": "files" }, g.files.map(function (p) { return fileRow(byPath[p]); })),
+        rows.length ? el("table", {}, [el("thead", {}, [el("tr", {}, [el("th", { text: "Case" }), el("th", { text: "Before" }), el("th", { text: "After" })])]),
+          el("tbody", {}, rows)]) : null
+      ])
+    ]);
+  })));
+
+  var order = map.reading_order || [], risks = map.risks || [];
+  add([el("div", { "class": "cols" }, [
+    el("div", {}, section("Reading order", [order.length ? el("ol", { "class": "order" }, order.map(function (r) { return el("li", {}, [el("code", { text: r })]); }))
+      : el("p", { "class": "empty", text: "none given" })])),
+    el("div", {}, section("Risk spots", risks.length ? risks.map(function (r) { return el("div", { "class": "risk" }, [el("code", { text: r.ref }), " ", r.note]); })
+      : [el("p", { "class": "empty", text: "none named" })]))
+  ])]);
+
+  var grouped = {};
+  map.groups.forEach(function (g) { g.files.forEach(function (p) { grouped[p] = true; }); });
+  var rest = facts.files.filter(function (f) { return !grouped[f.path]; });
+  var tests = [];
+  facts.files.forEach(function (f) { f.tests.forEach(function (t) { tests.push(t); }); });
+  add([el("div", { "class": "cols" }, [
+    el("div", {}, section("Not in a group (" + rest.length + ")", [rest.length ? el("ul", { "class": "files noise" }, rest.map(fileRow)) : el("p", { "class": "empty", text: "none" })])),
+    el("div", {}, section("New and changed tests (" + tests.length + ")", [tests.length ? el("ul", { "class": "tests mono" }, tests.map(function (t) { return el("li", { text: t }); }))
+      : el("p", { "class": "empty", text: "none found" })]))
+  ])]);
+  add(section("Commits", [el("ol", { "class": "order" }, facts.commits.map(function (c) { return el("li", { text: c }); }))]));
+})();
+</script>
+</body>
+</html>

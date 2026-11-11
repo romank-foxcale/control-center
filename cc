@@ -32,6 +32,7 @@ usage() {
     '  prs show <repo> <n> [--diff] | prs checkout <repo> <n>  One PR for review; its head as feature pr-<repo>-<n>' \
     '  prs threads|judge <repo> <n> [--all] [--json]  Review threads waiting on you; judge them with anonymous sceptics' \
     '  prs learn [repo...] [--since YYYY-MM-DD] [--harvest-only] [--json]  Accepted review comments of merged PRs since the last run; the review-learner agent turns them into candidate lessons' \
+    '  changes collect|render <repo> <n>  Change map of one PR: facts and a source-only diff to read, then a local HTML page from map.json' \
     '  worktree <create|add|land|status|remove> ...' \
     '  migrate-layout [--dry-run]  Move this CC'"'"'s clones and worktrees from ../repos and ../worktrees into repos/ and worktrees/' \
     '  trello <status|boards|lists|connect|link|show|comment|move> ...  Trello cards, on demand only' \
@@ -194,6 +195,9 @@ case "$command_name" in
     ;;
   prs)
     exec python3 "$cc_root/scripts/prs.py" "$cc_root" "$@"
+    ;;
+  changes)
+    exec python3 "$cc_root/scripts/changes.py" "$cc_root" "$@"
     ;;
   worktree)
     exec python3 "$cc_root/scripts/worktrees.py" "$cc_root" "$@"

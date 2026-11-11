@@ -1,0 +1,6 @@
+interface:
+  display_name: "CC change map"
+  short_description: "Explain one PR as a compact change map and HTML page"
+  default_prompt: "Use $cc-changes to make a change map of a pull request of this Control Center's repos."
+policy:
+  allow_implicit_invocation: true
