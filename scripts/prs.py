@@ -71,7 +71,8 @@ def slug(root: Path, identifier: str) -> str:
 
 
 def gh(*arguments: str) -> str:
-    result = subprocess.run(["gh", *arguments], capture_output=True, text=True, timeout=120)
+    # A diff can hold bytes that are not UTF-8 (binary fixtures, Shift-JIS files): replace them, never fail.
+    result = subprocess.run(["gh", *arguments], capture_output=True, encoding="utf-8", errors="replace", timeout=120)
     if result.returncode != 0:
         raise ValueError(result.stderr.strip() or f"gh {' '.join(arguments)} failed")
     return result.stdout
