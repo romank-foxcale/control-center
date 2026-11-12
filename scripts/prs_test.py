@@ -25,8 +25,8 @@ repo = sys.argv[sys.argv.index("--repo") + 1]
 if sys.argv[1:3] == ["pr", "view"]:
     print(json.dumps(json.load(open(os.environ["FAKE_GH_PULLS"]))["view"]))
     sys.exit(0)
-if sys.argv[1:3] == ["pr", "diff"]:
-    print("diff --git a/api.py b/api.py")
+if sys.argv[1:3] == ["pr", "diff"]:  # raw bytes, as gh gives them: the Shift-JIS line is not UTF-8
+    sys.stdout.buffer.write(b"diff --git a/api.py b/api.py\\n+# \\x93\\xfa\\x96\\x7b\\n")
     sys.exit(0)
 with open(os.environ["FAKE_GH_LOG"], "a") as log:
     log.write(repo + "\\n")
@@ -102,6 +102,7 @@ def main() -> int:
         assert detail.returncode == 0, detail.stderr
         assert "trello: https://trello.com/c/Cd1/7-health, https://trello.com/c/Xy9" in detail.stdout, detail.stdout
         assert "+5 -1  api.py" in detail.stdout and "diff --git a/api.py" in detail.stdout, detail.stdout
+        assert "+# �" in detail.stdout, f"bytes that are not UTF-8 are replaced, not fatal: {detail.stdout}"
         outside = subprocess.run([sys.executable, str(SCRIPT), str(root), "show", "di-backend", "1"], capture_output=True, text=True, env=env)
         assert outside.returncode != 0 and "not in the catalog" in outside.stderr, "show is limited to the catalog too"
 
