@@ -2,8 +2,8 @@
 id: projects.index
 title: Projects
 status: active
-summary: Map of the roles of connected sibling projects; the executable interface lives in nix/projects.
-verified_at: 2026-10-09
+summary: Map of the roles of the onboarded catalog repositories; the executable interface lives in nix/projects.
+verified_at: 2026-11-15
 evidence:
   - nix/projects/default.nix
 relations:

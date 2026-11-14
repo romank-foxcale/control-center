@@ -136,8 +136,26 @@ def check_stale_evidence() -> None:
               validator.stale_evidence(root) == expected, validator.stale_evidence(root))
 
 
+def check_seeded_cc_is_not_stale() -> None:
+    """cc-kit new copies the seed and the first commit dates every file to that day: adding a path is not a change."""
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary) / "cc"
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        commit(root, "2026-04-01", {"control-center.json": "{}", "AGENTS.md": "1", "lib/x.py": "1",
+                                    "docs/index.md": dated_note(["AGENTS.md", "lib"])})
+        found = validator.stale_evidence(root)
+        check("a fresh CC: seed notes are not stale because the seed commit added their evidence", found == [], found)
+
+        commit(root, "2026-04-02", {"AGENTS.md": "2", "lib/new.py": "1"})
+        found = validator.stale_evidence(root)
+        expected = ["docs/index.md: evidence 'AGENTS.md' changed on 2026-04-02, after verified_at 2026-03-10",
+                    "docs/index.md: evidence 'lib' changed on 2026-04-02, after verified_at 2026-03-10"]
+        check("a later change to seed evidence is still reported", found == expected, found)
+
+
 def main() -> int:
     check_stale_evidence()
+    check_seeded_cc_is_not_stale()
     check_template_ships_an_empty_project_layer()
     check("a complete lesson passes", errors_for(LESSON) == [], errors_for(LESSON))
     for field, value, expected in (

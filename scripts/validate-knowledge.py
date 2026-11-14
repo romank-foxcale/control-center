@@ -117,21 +117,26 @@ MAINTAINED = {"active", "accepted", "draft"}
 
 def last_changes(root: Path, paths: set[str]) -> dict[str, str]:
     """The last commit date (YYYY-MM-DD) of each path, a file or a directory, from one walk of the history.
+    The oldest commit that touches a path only adds it, so it is not a change: a path touched by one commit gets no
+    date. Otherwise a new CC, whose first commit copies the whole seed, would date every seed file to that day.
     Paths Git does not track (ignored, untracked) get no date."""
     log = subprocess.run(
         ["git", "-C", str(root), "log", "--format=@%cs", "--name-only", "--no-renames", "--", *sorted(paths)],
         capture_output=True, text=True,
     )
-    dates: dict[str, str] = {}
+    newest: dict[str, str] = {}
+    commits: dict[str, int] = {}
     day = ""
-    for line in log.stdout.splitlines() if log.returncode == 0 else []:
+    touched: set[str] = set()
+    for line in [*(log.stdout.splitlines() if log.returncode == 0 else []), "@"]:
         if line.startswith("@"):
-            day = line[1:]
+            for path in touched:
+                newest.setdefault(path, day)
+                commits[path] = commits.get(path, 0) + 1
+            day, touched = line[1:], set()
         elif line:
-            for path in paths - dates.keys():
-                if line == path or line.startswith(path.rstrip("/") + "/"):
-                    dates[path] = day
-    return dates
+            touched |= {path for path in paths if line == path or line.startswith(path.rstrip("/") + "/")}
+    return {path: date for path, date in newest.items() if commits[path] > 1}
 
 
 def stale_evidence(root: Path) -> list[str]:
