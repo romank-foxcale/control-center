@@ -3,7 +3,7 @@ id: index
 title: Control Center knowledge map
 status: active
 summary: Entry point into this CC's knowledge - the kit's rules, architecture and decisions, and this CC's own decisions, debt, hacks, projects, review lessons and glossary.
-verified_at: 2026-10-11
+verified_at: 2026-11-15
 evidence:
   - AGENTS.md
 relations:

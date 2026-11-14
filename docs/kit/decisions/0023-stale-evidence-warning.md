@@ -2,8 +2,8 @@
 id: kit.decision.0023-stale-evidence-warning
 title: A note whose evidence changed after verified_at gets a warning, not a failure
 status: accepted
-summary: ./cc check and ./cc validate list every active, accepted or draft note whose in-repo evidence was committed after the note's verified_at, from one git log over all evidence paths; it is a warning because most such changes leave the note true, and it is skipped where there is no full Git history (the Nix sandbox, a shallow clone), and a CC skips docs/kit, which only the template can fix.
-verified_at: 2026-10-17
+summary: ./cc check and ./cc validate list every active, accepted or draft note whose in-repo evidence was committed after the note's verified_at, from one git log over all evidence paths, where the commit that first adds a path is not a change; it is a warning because most such changes leave the note true, and it is skipped where there is no full Git history (the Nix sandbox, a shallow clone), and a CC skips docs/kit, which only the template can fix.
+verified_at: 2026-11-15
 evidence:
   - scripts/validate-knowledge.py
   - scripts/validate_knowledge_test.py
@@ -28,6 +28,7 @@ Every note names its `evidence` and the day it was last checked (`verified_at`),
 
 - `scripts/validate-knowledge.py --stale` lists `note: evidence 'path' changed on DATE, after verified_at DATE` for each active, accepted or draft note whose evidence path was committed on a later day than `verified_at`. A directory counts as changed when any file under it changed. Superseded and archived notes are not maintained, so they are skipped.
 - One `git log --name-only` over all distinct evidence paths gives every date, so the cost does not grow with the number of notes.
+- The oldest commit that touches an evidence path only adds it, so it does not count as a change. `cc-kit new` copies the seed and the first commit dates every seed file to that day; without this rule every seed note in a new CC would be flagged although nothing in it changed. A note cannot be verified against a file that did not exist yet, so nothing real is lost.
 - Only paths Git tracks have a date: URLs, ignored paths (`repos/`, `worktrees/`) and untracked files are skipped.
 - A CC (it has `control-center.json`) skips notes under `docs/kit/`: it never edits the kit ([0017](0017-kit-and-project-layers.md)), so it could not act on them, and a kit update would leave warnings nobody there can clear. The template, which owns the kit, checks kit notes.
 - It never fails. Many changes (a refactor, a new option) leave a note true; the warning asks for a look, and the fix is to re-check the note and refresh `verified_at`, or correct it.
