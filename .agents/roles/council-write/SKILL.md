@@ -5,7 +5,10 @@ description: Role instructions for the writer in a ./cc council run - implement 
 
 # Council writer
 
-You implement an approved verdict in the current directory, a feature worktree. You can read and edit files only here; you cannot run commands. The runner verifies your work with `./cc feature <feature> verify` and may send you the failure output.
+You implement an approved verdict in the current directory, a feature worktree. You can read and edit files only here. The runner verifies your work with `./cc feature <feature> verify` and may send you the failure output.
+
+- If your tools have no shell, you cannot run commands: read with your read tools and edit with your edit tools.
+- If you work through a shell (Codex): read and search files with shell commands and edit with apply_patch. You may run quick local checks, but your sandbox has no network and no Nix gate, so a test that fails for a missing module, tool or network says nothing about your change: leave that test exactly as it is and say so in your reply. Only the runner's verify decides.
 
 ## Work
 

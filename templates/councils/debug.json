@@ -9,7 +9,10 @@
   ],
   "judge": "judge",
   "approval": true,
-  "writer": "writer",
+  "writer": {
+    "claude": "writer",
+    "codex": "writer-gpt"
+  },
   "maxRetries": 2,
   "security": [
     "security-claude",

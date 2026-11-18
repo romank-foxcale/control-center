@@ -120,7 +120,9 @@ def snapshot(root: Path) -> Snapshot:
                 # A threads council has sceptics where the others have proposers.
                 "proposers": ", ".join(council.get("proposers") or council.get("sceptics") or []),
                 "judge": council.get("judge", "?"),
-                "writer": council.get("writer", "?"),
+                # One writer per provider (the winning proposal's writes), or one writer in older catalogs.
+                "writer": (", ".join(f"{provider}: {role}" for provider, role in council["writer"].items())
+                           if isinstance(council.get("writer"), dict) else council.get("writer", "?")),
                 "approval": council.get("approval"),
                 "maxRetries": council.get("maxRetries", "?"),
             }

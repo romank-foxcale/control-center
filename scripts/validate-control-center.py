@@ -17,6 +17,7 @@ REPOSITORY_KINDS = {"project", "reference"}
 TARGETS = {"windows", "linux", "macos"}
 # Must match scripts/council/providers.py.
 PROVIDERS = {"claude", "codex", "cursor"}
+WRITING_PROVIDERS = {"claude", "codex"}  # Cursor roles are read-only (docs/kit/decisions/0014-cursor-provider-and-security-council.md)
 # Model names that silently move to a newer model, so a role's behaviour changes with no change here
 # (docs/kit/decisions/0024-pinned-model-ids.md).
 FLOATING_MODELS = {"claude": {"opus", "sonnet", "haiku"}, "cursor": {"auto"}}
@@ -273,7 +274,7 @@ def validate_councils(root: Path, roles: dict[str, dict[str, Any]], errors: list
             errors.append(f"{relative}: kind must be one of {', '.join(sorted(COUNCIL_KINDS))}")
 
         def require_role(slot: str, value: Any, access: str, *others: str) -> None:
-            if value not in roles:
+            if not isinstance(value, str) or value not in roles:
                 errors.append(f"{relative}: {slot} '{value}' is not a role in catalog/agents")
             elif roles[value].get("access") not in (access, *others):
                 errors.append(f"{relative}: {slot} '{value}' must have access '{access}'"
@@ -315,7 +316,18 @@ def validate_councils(root: Path, roles: dict[str, dict[str, Any]], errors: list
             for proposer in proposers:
                 require_role("proposer", proposer, "read-only")
         require_role("judge", data.get("judge"), "read-only")
-        require_role("writer", data.get("writer"), "write-worktree")
+        # One writer per provider that can write; the winning proposal's provider writes it
+        # (docs/kit/decisions/0034-council-load-balance.md). Older catalogs name one writer.
+        writer = data.get("writer")
+        if isinstance(writer, dict):
+            if not writer or not set(writer) <= WRITING_PROVIDERS:
+                errors.append(f"{relative}: 'writer' must map one or more of {', '.join(sorted(WRITING_PROVIDERS))} to a role")
+            for provider, role in writer.items():
+                require_role(f"writer for {provider}", role, "write-worktree")
+                if role in roles and roles[role].get("provider") != provider:
+                    errors.append(f"{relative}: writer for {provider} '{role}' runs on {roles[role].get('provider')}")
+        else:
+            require_role("writer", writer, "write-worktree")
         # null or [] for none, one role id (catalogs older than the list), or a list of distinct reviewers.
         security = data.get("security")
         reviewers = [security] if isinstance(security, str) else security if isinstance(security, list) else []

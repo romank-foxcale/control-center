@@ -34,6 +34,7 @@ relations:
   - docs/kit/decisions/0031-new-project-cc.md
   - docs/kit/decisions/0032-change-maps.md
   - docs/kit/decisions/0033-codex-rule-hooks.md
+  - docs/kit/decisions/0034-council-load-balance.md
 ---
 
 # Kit knowledge map
@@ -90,3 +91,4 @@ This folder belongs to the kit. A CC never edits it: to change kit behaviour for
 - [A CC can start a new project whose repos do not exist yet](decisions/0031-new-project-cc.md)
 - [A PR is explained as a change map that an agent fills as data into a fixed template](decisions/0032-change-maps.md)
 - [The rule hooks also guard a Codex chat, where every ask becomes a deny](decisions/0033-codex-rule-hooks.md)
+- [The winning proposal's provider writes it, and the CC measures who wins and who spends](decisions/0034-council-load-balance.md)

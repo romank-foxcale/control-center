@@ -6,7 +6,7 @@ run recorded in calls[], never today's catalog, so a role moved to another model
 --pick is counted apart from the judge's choice. Tokens come from every call log of every run folder (councils,
 risk audits, thread judging), by the CLI on the log's first line and the usage line it ends with; a call that never
 reported is counted as unknown, never as zero. Chat sessions and ./cc prs learn (temporary logs) are not counted.
-Why: docs/kit/decisions/0007-agent-councils.md (token measurement).
+Why: docs/kit/decisions/0034-council-load-balance.md.
 """
 
 from __future__ import annotations
