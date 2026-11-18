@@ -3,7 +3,7 @@
 after the user types <cc name>/<entry name> on their own terminal.
 
 This is the only kit command that deletes data a mirror protects. It reads the answer from /dev/tty, not stdin, and
-refuses inside Claude Code (CLAUDECODE is set), so an agent cannot confirm it for the user; the hooks also deny it.
+refuses inside Claude Code or Codex (AGENT_MARKERS), so an agent cannot confirm it for the user; the hooks also deny it.
 Why and limits: docs/kit/decisions/0030-disk-management.md.
 """
 
@@ -23,6 +23,11 @@ from backup_where import mirrors  # noqa: E402
 from disk import Runner, human, run, tree_size  # noqa: E402
 
 
+# Set in an agent's shell: Claude Code sets CLAUDECODE, Codex sets CODEX_SESSION_ID and CODEX_THREAD_ID (probed with
+# codex-cli 0.160.1, 2026-11-18; docs/kit/decisions/0033-codex-rule-hooks.md).
+AGENT_MARKERS = ("CLAUDECODE", "CODEX_SESSION_ID", "CODEX_THREAD_ID")
+
+
 def ask_terminal(prompt: str, tty: Path = Path("/dev/tty")) -> str | None:
     """One line typed on the controlling terminal, or None when there is none."""
     try:  # unbuffered bytes: a buffered text handle opened r+ wants to seek, which a terminal cannot
@@ -40,7 +45,7 @@ def size(path: Path) -> str:
 
 def remove(root: Path, name: str, with_mirror: bool, env: dict[str, str], runner: Runner, out,
            ask: Callable[[str], str | None]) -> int:
-    if env.get("CLAUDECODE"):
+    if any(env.get(marker) for marker in AGENT_MARKERS):
         print("error: an agent cannot run this; the user runs it in their own terminal. Nothing was deleted.", file=out)
         return 1
     try:

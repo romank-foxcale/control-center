@@ -89,6 +89,15 @@ class Remove(unittest.TestCase):
         self.assertEqual(self.prompts, [])
         self.assertTrue(self.source.is_dir())
 
+    def test_refused_inside_codex(self) -> None:
+        # A Codex shell sets these (probed with codex-cli 0.160.1, 2026-11-18); CLAUDECODE is not set there.
+        for marker in ("CODEX_SESSION_ID", "CODEX_THREAD_ID"):
+            status, text = self.remove("emb", **{marker: "01a1ece4-5edf"})
+            self.assertEqual(status, 1, (marker, text))
+            self.assertIn("an agent cannot run this", text)
+        self.assertEqual(self.prompts, [])
+        self.assertTrue(self.source.is_dir())
+
     def test_unknown_and_absent_entries(self) -> None:
         self.assertIn("unknown localData entry: nope", self.remove("nope")[1])
         status, text = self.remove("features", answer="my-cc/features")
@@ -111,7 +120,8 @@ class Remove(unittest.TestCase):
 
     def test_typed_on_a_real_terminal(self) -> None:
         env = {**os.environ, **self.env}
-        env.pop("CLAUDECODE", None)
+        for marker in data.AGENT_MARKERS:
+            env.pop(marker, None)
         pid, fd = pty.fork()
         if pid == 0:  # the child gets the pseudo-terminal as its controlling terminal, so /dev/tty is it
             os.execve(sys.executable, [sys.executable, "-B", data.__file__, str(self.root), "remove", "emb"], env)

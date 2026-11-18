@@ -34,6 +34,7 @@ relations:
   - docs/kit/decisions/0027-python-gate-venv-cache.md
   - docs/kit/decisions/0028-verify-before-push.md
   - docs/kit/decisions/0029-risk-council.md
+  - docs/kit/decisions/0033-codex-rule-hooks.md
 ---
 
 # A CC shows where its disk space goes and frees Nix space without touching CC state
@@ -76,7 +77,7 @@ A risk council ([0029](0029-risk-council.md)) audited the plan before it was bui
   - Each run writes `.cc-local/hooks/backup-locations.json` (every backup folder and mirror, also from `--to`) before the state archive.
 - **`./cc backup where`** reads the manifest, the backup folders, the records, the locations file and the `cc-backup` remote-tracking ref, with no network, so it works in a CC cloned again from GitHub. It prints each backup folder (WSL and Windows path, age), the GitHub link, each entry's mirror state and restore command, and warnings: no complete mirror, a stopped sync, a sync older than 7 days, the WSL disk's drive, OneDrive (`%OneDrive%` and its variants), undeclared `.cc-local` folders over 1 GiB. It says it cannot see other sync clients. It exits 1 when an irreplaceable entry has no complete mirror: **compact a WSL disk only after it exits 0.** `doctor --disk` shows one line per entry.
 - **`./cc backup restore <name> [--all]`** copies the last complete sync's files (`--all`: also orphans) into a missing or empty folder, and checks the whole list for missing files and symlinks before it writes anything.
-- **`./cc data remove <name> [--mirror]`** is the only kit command that deletes such data. It shows the size, reads `<cc name>/<entry>` from `/dev/tty` (not stdin), and refuses inside Claude Code (`CLAUDECODE`) or without a terminal. A hook ([0013](0013-rule-hooks.md)) denies agent commands that would delete, move away or overwrite an irreplaceable entry or a mirror, and asks before an edit drops the tag.
+- **`./cc data remove <name> [--mirror]`** is the only kit command that deletes such data. It shows the size, reads `<cc name>/<entry>` from `/dev/tty` (not stdin), and refuses inside Claude Code (`CLAUDECODE`), inside Codex (`CODEX_SESSION_ID` or `CODEX_THREAD_ID`, [0033](0033-codex-rule-hooks.md)) or without a terminal. A hook ([0013](0013-rule-hooks.md)) denies agent commands that would delete, move away or overwrite an irreplaceable entry or a mirror, and asks before an edit drops the tag.
 - **`./cc relock`** runs `nix flake lock --override-input nixpkgs github:<owner>/<repo>/<kit rev>`, then a plain lock. If any other lock node changed or the rev moved again, it puts `flake.lock` back byte for byte. It never commits.
 - **`control-center.json`** may declare `localData` (name, path under `.cc-local/data/`, `budgetGB`, `rebuild` app or null, `rebuildNeeds`, `tags`, `quiesce`, `purge`), `localCaches` (name, path) and `backup` (`path`, `keep`, `push`, `dataPath`). All are optional. Machine paths start at `~/`, `$HOME/`, `$XDG_CACHE_HOME/`, `%LOCALAPPDATA%` or `%USERPROFILE%`, never at an absolute path. The rule for what goes where is [local data](../rules/local-data.md).
 - **Not in the kit**: compacting a disk, editing nix.conf, root collection, moving any CC's existing data, and a binary cache (a later decision, after a spike).
