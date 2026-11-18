@@ -2,11 +2,15 @@
 id: kit.decision.0033-codex-rule-hooks
 title: The rule hooks also guard a Codex chat, where every ask becomes a deny
 status: accepted
-summary: Codex sends shell commands as Bash and every edit as one apply_patch text, and it runs a command whose hook answers ask without a word. The rule hooks check each file of a patch as its own edit and turn every ask into a deny that tells the agent to ask the user in chat; stop and session-start are shared with Claude Code.
+summary: Codex sends shell commands as Bash and every edit as one apply_patch text, and it runs a command whose hook answers ask without a word. The rule hooks check each file of a patch as its own edit and turn every ask into a deny that tells the agent to ask the user in chat; stop and session-start are shared with Claude Code. ./cc agents sync writes .codex/hooks.json, and ./cc doctor asks Codex whether it trusts them, because Codex skips untrusted hooks silently.
 verified_at: 2026-11-18
 evidence:
   - scripts/rule_hooks.py
   - scripts/rule_hooks_test.py
+  - scripts/agent-configs.py
+  - scripts/agent_configs_test.py
+  - .codex/hooks.json
+  - cc
 relations:
   - docs/kit/index.md
   - docs/kit/decisions/0005-multi-tool-agent-configs.md
@@ -31,6 +35,8 @@ Codex reads `AGENTS.md` and `.agents/skills` (0005), so a Codex chat in a CC get
 - `rule_hooks.py codex-post-tool` returns the knowledge-rule feedback for every note a patch wrote, in Codex's block form.
 - `stop` and `session-start` are the same handlers for both tools; their replies already have the form Codex reads.
 - A hook that fails still exits 1 and blocks nothing; in Codex a failed hook also lets the call run.
+- `./cc agents sync` writes the whole `.codex/hooks.json` (PreToolUse for `Bash` and `apply_patch`, PostToolUse for `apply_patch`, Stop, SessionStart on startup), and `./cc agents check` fails when it differs. The command finds the CC as `git rev-parse --show-toplevel`, because Codex runs it in the session's folder and a committed absolute path is not allowed; Codex loads project hooks only up to the Git root, so in the CC that is the CC root.
+- Codex runs a project hook only in a trusted folder and only after the user trusts that hook (`/hooks`), keyed by file, event and position, with a hash of the handler. A changed handler, timeout or group order is skipped silently until trusted again; a change to `scripts/rule_hooks.py` alone keeps the trust (probed 2026-11-18). `./cc doctor` asks Codex itself (`codex app-server`, JSON-RPC `hooks/list`, no model call) and warns about every CC hook that is not loaded, not trusted or disabled.
 
 ## Options considered
 
@@ -43,7 +49,9 @@ Codex reads `AGENTS.md` and `.agents/skills` (0005), so a Codex chat in a CC get
 - In Codex an approved exception costs the user a step: they run the command or make the edit themselves, where Claude Code shows an approve button.
 - The reference-repo reminder (post-read) has no Codex form, because Codex reads through `Bash`.
 - A path the shell builds at run time (a variable, a script) is not seen, the same limit as 0013.
-- Codex must load the hooks and trust each one before they run; how the CC writes and checks them is a separate step of the same plan.
+- Each person trusts the CC folder and its hooks once in Codex, and again after a kit update that changes `.codex/hooks.json`; until then a Codex chat has the rules only as text, and only `./cc doctor` shows it.
+- `hooks/list` is an app-server method, not a documented CLI command; if a Codex update changes it, doctor prints a warning that it could not ask, never a pass.
+- The hook command needs a POSIX shell (WSL, Linux, macOS), as `scripts/hook` already does.
 
 ## Revisit when
 

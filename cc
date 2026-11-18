@@ -94,6 +94,9 @@ case "$command_name" in
     else
       printf '%s\n' 'note: Docker/Podman is absent; container E2E apps will be unavailable'
     fi
+    # Codex runs the CC's rule hooks only after the user trusts them; it skips them silently otherwise.
+    # Why: docs/kit/decisions/0033-codex-rule-hooks.md
+    python3 "$cc_root/scripts/agent-configs.py" "$cc_root" codex-trust || true
     if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
       printf '%s\n' 'gh: logged in'
     else
