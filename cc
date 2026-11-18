@@ -19,7 +19,7 @@ usage() {
     '  build <name>   Build .#<name>' \
     '  run <name>     Run .#<name>' \
     '  verify [repo...] [--quality] [--full]  Run every check plus each catalog target gate (and quality gates)' \
-    '  council <run|approve|reject|status|models|set-role|set> ...  Multi-model councils and their settings' \
+    '  council <run|approve|reject|status|stats|models|set-role|set> ...  Multi-model councils and their settings' \
     '  watch [run]    Follow a council or verify run live: steps, agent talk, stalls, result' \
     '  eval <run|compare|trace|regrade> ...  Measure an agent-context change: headless claude runs, graded, with tokens, cost and time' \
     '  settings [show]  Settings panel: agents and models, councils, repos; show prints them as text' \
@@ -218,6 +218,10 @@ case "$command_name" in
     exec python3 "$cc_root/scripts/events.py" "$cc_root" "$@"
     ;;
   council)
+    if [[ "${1:-}" == "stats" ]]; then
+      shift
+      exec python3 "$cc_root/scripts/council/stats.py" "$cc_root" "$@"
+    fi
     exec python3 "$cc_root/scripts/council/run.py" "$cc_root" "$@"
     ;;
   eval)

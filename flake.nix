@@ -71,6 +71,7 @@
                 cd ${self}/scripts/council
                 ${pkgs.python3}/bin/python -B providers_test.py
                 ${pkgs.python3}/bin/python -B council_test.py
+                ${pkgs.python3}/bin/python -B stats_test.py
                 touch "$out"
               '';
               rule-hooks = pkgs.runCommand "control-center-rule-hooks" { nativeBuildInputs = [ pkgs.git ]; } ''

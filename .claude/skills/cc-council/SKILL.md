@@ -19,6 +19,7 @@ First read `../_shared/cc-cli.md` and follow it.
 | Use proposal B instead / change something | `./cc council approve <run-id> [--pick <label>] [--note "<instruction>"]` |
 | Stop this run | `./cc council reject <run-id>` |
 | What runs are there? / show run R | `./cc council status [<run-id>]` |
+| Which model wins most? / how are tokens spread over the providers? | `./cc council stats [--days N]`: proposal win rates per council kind (the judge model next to them, user picks apart) and each provider's tokens over the last N days (default 7). Chat sessions are not counted. |
 | Are my subscriptions logged in? | `./cc doctor` |
 
 ## Rules
