@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import providers
@@ -38,6 +39,12 @@ emit({{"type": "system", "subtype": "init"}})
 emit(text("I'll check the code first."))
 for _ in range(int(os.environ.get("FAKE_CURSOR_TOOLS", "1"))):
     emit({{"type": "tool_call", "subtype": "started", "tool_call": {{"readToolCall": {{"args": {{"path": str(workspace / "app.py")}}}}}}}})
+if os.environ.get("FAKE_CURSOR_ACT") == "hang":
+    # Like the codex launcher: a child that inherits stdout outlives a kill of this process alone.
+    import subprocess, time
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    Path(os.environ["FAKE_CURSOR_CHILD"]).write_text(str(child.pid))
+    time.sleep(60)
 emit(text("DECISION: A"))
 emit(text("## Reasoning\\nA reuses the parser."))
 emit({{"type": "result", "subtype": "success", "result": "I'll check the code first.DECISION: A## Reasoning",
@@ -150,6 +157,28 @@ def main() -> int:
         assert providers.usage(log) is None, "a call stopped before its result has no usage, not zero"
         assert providers.max_tool_calls(role) == providers.DEFAULT_MAX_TOOL_CALLS
 
+        # A stop must end the whole process tree: the real codex launcher leaves a child that holds stdout open,
+        # and a kill of the launcher alone let a 60 s timeout run for 612 s (spike S5, 2026-11-18).
+        os.environ.update({"FAKE_CURSOR_ACT": "hang", "FAKE_CURSOR_TOOLS": "1", "FAKE_CURSOR_CHILD": str(base / "child.pid")})
+        for name, call in (("timeout", lambda: providers.run(role, "Judge.", worktree, log, timeout=2)),
+                           ("cap", lambda: providers.run({**role, "maxToolCalls": 0}, "Judge.", worktree, log))):
+            start = time.monotonic()
+            try:
+                call()
+                raise AssertionError(f"a hung call must fail at its {name}")
+            except providers.ProviderError:
+                pass
+            assert time.monotonic() - start < 15, f"the {name} stop took {time.monotonic() - start:.0f} s"
+            child = int((base / "child.pid").read_text())
+            time.sleep(0.5)
+            try:
+                os.kill(child, 0)
+                alive = Path(f"/proc/{child}/stat").exists() and Path(f"/proc/{child}/stat").read_text().split()[2] != "Z"
+            except ProcessLookupError:
+                alive = False
+            assert not alive, f"the {name} stop left the provider's child {child} running"
+        os.environ["FAKE_CURSOR_ACT"] = "reply"
+
     # read-only-web: web search and fetch on top of reading, and nothing else; plain read-only gets no web.
     # Claude's dontAsk mode denies WebSearch unless it is also allowed (checked with the real CLI, 2026-10).
     claude = {"id": "risk", "provider": "claude", "model": "m", "access": "read-only-web"}
@@ -165,6 +194,10 @@ def main() -> int:
     codex = providers.command({**claude, "provider": "codex"}, Path("."), Path("last.txt"))
     assert codex[codex.index("--sandbox") + 1] == "read-only" and 'web_search="live"' in codex, codex
     assert 'web_search="live"' not in providers.command({**claude, "provider": "codex", "access": "read-only"}, Path("."), Path("l"))
+    # No user or project hook may answer for a role: trusted user hooks still ran under --ignore-user-config (spike S1).
+    for access in ("read-only", "read-only-web", "write-worktree"):
+        argv = providers.command({**claude, "provider": "codex", "access": access}, Path("."), Path("l"))
+        assert any(a == "--config" and b == "features.hooks=false" for a, b in zip(argv, argv[1:])), argv
     try:
         providers.command({**claude, "provider": "cursor"}, Path("."), Path("last.txt"))
         raise AssertionError("cursor has no web access level")
