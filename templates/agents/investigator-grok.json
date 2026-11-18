@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "investigator-grok",
+  "purpose": "Diagnoses the root cause of a failure without editing",
+  "provider": "cursor",
+  "model": "grok-4.7-high",
+  "access": "read-only",
+  "skills": [
+    "debug",
+    "council-investigate"
+  ]
+}

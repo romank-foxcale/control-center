@@ -2,10 +2,11 @@
   "schemaVersion": 1,
   "id": "coding",
   "kind": "coding",
-  "purpose": "Two models propose, an anonymous judge decides, the user approves, the writer implements and ./cc verify must pass",
+  "purpose": "Three models propose, an anonymous judge decides, the user approves, the writer implements and ./cc verify must pass",
   "proposers": [
     "proposer-claude",
-    "proposer-gpt"
+    "proposer-gpt",
+    "proposer-grok"
   ],
   "judge": "judge",
   "approval": true,

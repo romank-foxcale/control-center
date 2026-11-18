@@ -166,6 +166,23 @@ def check_writer_choice(base: Path) -> None:
     assert "- Writer: writer-gpt (codex m)" in (run.directory / "attempts.md").read_text()
 
 
+def check_show_verdict(base: Path) -> None:
+    """The verdict shown for approval names the judge's model and warns when a proposer shares it."""
+    import io
+    from contextlib import redirect_stdout
+    run = make_run(base, "show-verdict")
+    for identifier, cli, model in (("proposer-claude", "claude", "claude-opus-5-5"), ("proposer-grok", "cursor", "grok-4.7-high")):
+        (run.root / "catalog" / "agents" / f"{identifier}.json").write_text(json.dumps(
+            {"id": identifier, "provider": cli, "model": model, "access": "read-only", "skills": []}))
+    (run.directory / "verdict.md").write_text("DECISION: B\n")
+    run.save(labels={"A": "proposer-claude", "B": "proposer-grok"},
+             calls=[{"step": "verdict", "role": "judge", "provider": "cursor", "model": "grok-4.7-high"}])
+    out = io.StringIO()
+    with redirect_stdout(out):
+        run.show_verdict()
+    assert "Judge: judge (cursor grok-4.7-high), the same model as proposer-grok" in out.getvalue(), out.getvalue()
+
+
 def check_diff_checks() -> None:
     """A diff that weakens tests is flagged for the security reviewers; one that adds a secret is caught."""
     diff = (
@@ -193,6 +210,15 @@ def check_diff_checks() -> None:
     assert council_run.parse_verdict("I checked both.\n\nVERDICT: GO-WITH-CONDITIONS\n") == "GO-WITH-CONDITIONS", \
         "the verdict line need not be first (risk run 20261118-122527-risk)"
     assert council_run.parse_verdict("The verdict is GO, I think.") is None, "a mention in prose is not a verdict line"
+
+    # The judge's model is shown with the verdict, and a judge on a proposer's model is named as such (risk R14).
+    judge = {"id": "judge", "provider": "cursor", "model": "grok-4.7-high"}
+    grok = {"id": "proposer-grok", "provider": "cursor", "model": "grok-4.7-high"}
+    claude = {"id": "proposer-claude", "provider": "claude", "model": "claude-opus-5-5"}
+    note = council_run.judge_note(judge, [claude, grok])
+    assert note.startswith("Judge: judge (cursor grok-4.7-high)") and "same model as proposer-grok" in note, note
+    assert "may favour" in note, note
+    assert council_run.judge_note(judge, [claude]) == "Judge: judge (cursor grok-4.7-high)"
 
 
 def check_catalog_rules() -> None:
@@ -240,6 +266,22 @@ def check_catalog_rules() -> None:
             ], (model, validator.floating_models(root))
             assert errors() == [], (model, errors())
         sceptic.write_text(json.dumps(pinned))
+
+        # Work spread over three model families (docs/kit/decisions/0034-council-load-balance.md): coding proposals and
+        # debug diagnoses come from Claude, GPT and Grok; the risk judge is GPT and the review learner Grok.
+        def provider(role: str) -> str:
+            return json.loads((root / "catalog" / "agents" / f"{role}.json").read_text())["provider"]
+        for council_file, roles in (("coding", ["proposer-claude", "proposer-gpt", "proposer-grok"]),
+                                    ("debug", ["investigator-claude", "investigator-gpt", "investigator-grok"])):
+            proposers = json.loads((root / "catalog" / "councils" / f"{council_file}.json").read_text())["proposers"]
+            assert proposers == roles and [provider(role) for role in roles] == ["claude", "codex", "cursor"], (council_file, proposers)
+        for role, cli, skills in (("proposer-grok", "cursor", ["lean-code", "council-propose"]),
+                                  ("investigator-grok", "cursor", ["debug", "council-investigate"])):
+            data = json.loads((root / "catalog" / "agents" / f"{role}.json").read_text())
+            assert (data["provider"], data["access"], data["skills"]) == (cli, "read-only", skills), data
+        assert (provider("risk-judge"), json.loads((root / "catalog" / "agents" / "risk-judge.json").read_text())["access"]) \
+            == ("codex", "read-only-web"), "the risk judge searches the web, so it runs on Codex"
+        assert provider("review-learner") == "cursor"
 
         # The writer: one write-worktree role per provider that can write, or (older catalogs) one role.
         data = json.loads(coding.read_text())
@@ -398,6 +440,7 @@ def main() -> int:
 
         check_writer_history(base)
         check_writer_choice(base)
+        check_show_verdict(base)
         check_review_lessons(base)
         check_risk_council(base)
 

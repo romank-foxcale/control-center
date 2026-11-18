@@ -11,6 +11,10 @@ evidence:
   - scripts/council/stats_test.py
   - scripts/validate-control-center.py
   - templates/agents/writer-gpt.json
+  - templates/agents/proposer-grok.json
+  - templates/agents/investigator-grok.json
+  - templates/agents/risk-judge.json
+  - templates/agents/review-learner.json
   - templates/councils/coding.json
   - templates/councils/debug.json
   - templates/councils/testing.json
@@ -41,6 +45,7 @@ Probes on 2026-11-18: a Codex writer refused all work under the writer text "you
 - The writer role skill tells a writer without a shell to use its read and edit tools, and a Codex writer to read through the shell, edit with apply_patch and leave a test that fails only for sandbox reasons unchanged.
 - After the writer, the runner scans the lines its diff adds for credentials (AWS, private key, GitHub, Anthropic or OpenAI, Slack patterns) and stops the run `blocked-security` on a hit. It flags removed test definitions, new skip markers and fewer assertions in test files: the security reviewers get the flags above the diff, and the run summary repeats them as a warning. The flags never block: a test may be removed on purpose.
 - A run checks before its first call that every role's model is offered by its provider, when the provider lists models.
+- The default roles spread the work over three model families: coding proposals and debug diagnoses come from Claude, GPT and Grok (`proposer-grok`, `investigator-grok`, Cursor read-only); the risk judge is GPT (it needs web search, which Cursor roles do not get); the review learner is Grok. The coding judge stays Grok although Grok also proposes (user decision, 2026-11-18): the verdict shown for approval names the judge's model and the proposers that share it, and `./cc council stats` shows it next to the win rates, so a bias shows in the numbers and the user can `--pick` another proposal.
 - The risk judge's `VERDICT:` line is accepted on any line of its reply.
 
 ## Options considered
@@ -57,6 +62,7 @@ Probes on 2026-11-18: a Codex writer refused all work under the writer text "you
 - Each Codex writer call adds a `[projects."<worktree>"]` trust entry to the user's `~/.codex/config.toml` (probed 2026-11-18). The runner does not remove it yet.
 - The secret patterns catch common token formats only; a password in plain text passes.
 - Win rates mean little until about 10-20 runs per kind; a judge on the same model as a proposer may favour it, which is why the judge model is shown next to the rates.
+- A third proposer adds a Grok call to every coding and debug run. It runs in parallel with the others, but a Cursor role reads a fresh copy of the worktree, and Grok took about 3-4 minutes per proposal in a probe (2026-11-18), against 15 minutes for a Grok risk assessment earlier ([0029](0029-risk-council.md)). The review learner on Grok sends accepted PR comments to Cursor, as the Grok sceptic already does for thread judging.
 
 ## Revisit when
 

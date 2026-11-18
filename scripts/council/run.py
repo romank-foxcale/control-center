@@ -259,6 +259,17 @@ def unavailable_models(roles: list[dict[str, Any]], models_of: Callable[[str], l
     return missing
 
 
+def judge_note(judge: dict[str, Any], proposers: list[dict[str, Any]]) -> str:
+    """The judge's model, and the proposers on the same model: such a judge may favour its own model's proposal
+    even through anonymous labels (risk R14), so the user weighs the verdict knowing it."""
+    note = f"Judge: {judge['id']} ({judge['provider']} {judge['model']})"
+    same = [role["id"] for role in proposers if (role["provider"], role["model"]) == (judge["provider"], judge["model"])]
+    if same:
+        note += (f", the same model as {', '.join(same)}: it may favour that proposal; compare with ./cc council stats "
+                 "and use --pick if you disagree")
+    return note
+
+
 def parse_verdict(summary: str) -> str | None:
     """The risk judge's verdict: a line of its own, anywhere in the reply (a judge once wrote a sentence first)."""
     match = re.search(r"(?m)^\s*VERDICT:\s*(GO-WITH-CONDITIONS|NO-GO|GO)\b", summary)
@@ -673,6 +684,10 @@ class Run:
         for label, identifier in self.state["labels"].items():
             role = self.role(identifier)
             say(f"  {label}: {identifier} ({role['provider']} {role['model']})")
+        judge = next((call for call in self.state.get("calls", []) if call.get("step") == "verdict"), None)
+        if judge:
+            say(judge_note({"id": judge["role"], "provider": judge["provider"], "model": judge["model"]},
+                           [self.role(identifier) for identifier in self.state["labels"].values()]))
         say(f"\nAwaiting approval. Approve: ./cc council approve {self.state['id']} [--pick <label>] [--note <text>]")
         say(f"Reject: ./cc council reject {self.state['id']}")
 
