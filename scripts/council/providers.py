@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -187,6 +189,9 @@ def command(role: dict[str, Any], cwd: Path, last_message: Path) -> list[str]:
             "--skip-git-repo-check",
             "--ephemeral",
             "--ignore-user-config",
+            # Trusted user hooks still run under --ignore-user-config, and a hook's reply can replace the
+            # role's answer; no hook speaks for a role (spike S1, 2026-11-18).
+            "--config", "features.hooks=false",
             *(["--config", 'web_search="live"'] if access == "read-only-web" else []),
             "--color", "never",
             # JSONL events instead of the echoed prompt: the log shows commands and messages as they happen.
@@ -273,6 +278,15 @@ def run(
         shutil.rmtree(workspace, ignore_errors=True)
 
 
+def stop(process: subprocess.Popen[str]) -> None:
+    """Kill the call's whole process group. The codex launcher's child keeps stdout open after a kill of the
+    launcher alone, so the read loop waited for the child: a 60 s timeout ran for 612 s (2026-11-18)."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (AttributeError, ProcessLookupError, PermissionError):  # no process groups, or the group is gone
+        process.kill()
+
+
 def stream_call(
     role: dict[str, Any], prompt: str, cwd: Path, log: Path, timeout: int, on_say: Callable[[str], None] | None
 ) -> str:
@@ -288,8 +302,10 @@ def stream_call(
     with log.open("w", encoding="utf-8") as stream:
         stream.write(f"$ {' '.join(argv)}\n\n")
         stream.flush()
-        process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stream, cwd=cwd, text=True)
-        timer = threading.Timer(timeout, process.kill)
+        # Its own session, so a stop ends every process the CLI started, not only the launcher.
+        process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stream, cwd=cwd, text=True,
+                                   start_new_session=True)
+        timer = threading.Timer(timeout, stop, (process,))
         timer.start()
         try:
             process.stdin.write(prompt)
@@ -314,7 +330,7 @@ def stream_call(
                 calls += sum(said.startswith("tool: ") for said in activity.splitlines())
                 if calls > cap:
                     stream.write(f"stopped: reached the cap of {cap} tool calls\n")
-                    process.kill()
+                    stop(process)
                     break
             process.wait()
             # The last line of every log: what the call cost, or that its CLI never said.
