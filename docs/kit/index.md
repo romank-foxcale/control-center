@@ -33,6 +33,7 @@ relations:
   - docs/kit/decisions/0030-disk-management.md
   - docs/kit/decisions/0031-new-project-cc.md
   - docs/kit/decisions/0032-change-maps.md
+  - docs/kit/decisions/0033-codex-rule-hooks.md
 ---
 
 # Kit knowledge map
@@ -88,3 +89,4 @@ This folder belongs to the kit. A CC never edits it: to change kit behaviour for
 - [A CC shows where its disk space goes and frees Nix space without touching CC state](decisions/0030-disk-management.md)
 - [A CC can start a new project whose repos do not exist yet](decisions/0031-new-project-cc.md)
 - [A PR is explained as a change map that an agent fills as data into a fixed template](decisions/0032-change-maps.md)
+- [The rule hooks also guard a Codex chat, where every ask becomes a deny](decisions/0033-codex-rule-hooks.md)
