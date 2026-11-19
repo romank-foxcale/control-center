@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "review-grok",
+  "purpose": "Reviews a pull request at its head against the review bar, every finding with evidence",
+  "provider": "cursor",
+  "model": "grok-4.7-high",
+  "access": "read-only",
+  "skills": [
+    "lean-code",
+    "council-review"
+  ]
+}

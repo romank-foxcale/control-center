@@ -117,8 +117,9 @@ def snapshot(root: Path) -> Snapshot:
             {
                 "id": path.stem,
                 "kind": council.get("kind", "?"),
-                # A threads council has sceptics where the others have proposers.
-                "proposers": ", ".join(council.get("proposers") or council.get("sceptics") or []),
+                # Threads, risk and review councils name their first-round roles differently.
+                "proposers": ", ".join(council.get("proposers") or council.get("sceptics") or council.get("assessors")
+                                       or council.get("reviewers") or []),
                 "judge": council.get("judge", "?"),
                 # One writer per provider (the winning proposal's writes), or one writer in older catalogs.
                 "writer": (", ".join(f"{provider}: {role}" for provider, role in council["writer"].items())

@@ -14,6 +14,7 @@ STEPS = {
     "testing": ["propose", "judge", "approval", "write", "verify", "security", "security summary"],
     "debug": ["reproduce", "propose", "judge", "approval", "write test", "red check", "fix", "verify", "security", "security summary"],
     "risk": ["assess", "risk summary"],
+    "review": ["review", "review summary"],
 }
 
 

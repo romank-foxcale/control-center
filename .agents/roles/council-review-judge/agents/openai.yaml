@@ -1,0 +1,6 @@
+interface:
+  display_name: "Council Review Judge"
+  short_description: "Role for the judge in a review council run"
+  default_prompt: "Run ./cc council review; this role skill is loaded by the runner."
+policy:
+  allow_implicit_invocation: false

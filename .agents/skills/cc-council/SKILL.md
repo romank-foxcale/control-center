@@ -1,6 +1,6 @@
 ---
 name: cc-council
-description: Run, approve, reject or inspect multi-model coding, testing and debug councils with ./cc council, and change which provider and model each council role uses. Use when the user wants a council to implement, test or debug something on a feature, decides on a council verdict, asks about runs, or wants a role on another model.
+description: Run, approve, reject or inspect multi-model coding, testing, debug and PR review councils with ./cc council, and change which provider and model each council role uses. Use when the user wants a council to implement, test or debug something on a feature, decides on a council verdict, asks about runs, or wants a role on another model.
 ---
 
 # CC council
@@ -15,6 +15,7 @@ First read `../_shared/cc-cli.md` and follow it.
 | Write tests for X on feature F | `./cc council run testing --feature <feature> [--repo <repo>] --task "<task>"` |
 | Find and fix bug X on feature F | `./cc council run debug --feature <feature> [--repo <repo>] --task "<symptom>"` |
 | What could go wrong with change X? | `./cc council risk --repo <repo> --task "<change>"`: see the `cc-risk` skill |
+| Review PR N of repo R | `./cc council review <repo> <number> [--context-file <file>]`: see the `cc-review` skill |
 | Go ahead / approve | `./cc council approve <run-id>` |
 | Use proposal B instead / change something | `./cc council approve <run-id> [--pick <label>] [--note "<instruction>"]` |
 | Stop this run | `./cc council reject <run-id>` |
@@ -45,4 +46,5 @@ Roles are `catalog/agents/<role>.json`: `provider` (`claude`, `codex` or `cursor
 - Proposers, judge and security must stay `read-only`; only the writer is `write-worktree`. Cursor roles can only be `read-only`: Cursor's write limits are not enforced by the CC. Validation enforces both.
 - After updating `cursor-agent`, prove its read-only confinement still holds with `python3 scripts/council/providers.py probe cursor <model>` (it must print `no writes`).
 - The `threads` council (kind `threads`) is not run with `./cc council run`. It names the `sceptics` and the `judge` that `./cc prs judge` uses on review threads (the `cc-threads` skill). Change its models with `set-role` on `sceptic-claude`, `sceptic-grok` and `sceptic-judge`. It has no approval or retries. With two or more sceptics it needs a judge, and using two sceptics from the same provider defeats the point.
+- The `review` council (kind `review`) is run with `./cc council review`, not `./cc council run`. It names the `reviewers` (at least two, read-only; shipped on Claude, GPT and Grok) and the `judge` that verifies their findings. A reviewer that fails is named in `review.md` and the run goes on with the others; with fewer than two it fails. Change its models with `set-role` on `review-claude`, `review-gpt`, `review-grok` and `review-judge`.
 - A council needs at least two proposers. Using the same provider for every proposer defeats the point; warn the user if they ask for it.
