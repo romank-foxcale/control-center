@@ -16,6 +16,7 @@ relations:
   - docs/kit/rules/bootstrap.md
   - docs/kit/decisions/0013-rule-hooks.md
   - docs/kit/decisions/0019-lean-agent-context.md
+  - docs/kit/decisions/0033-codex-rule-hooks.md
 ---
 
 # One set of skills for every AI tool
@@ -37,5 +38,5 @@ People open the CC in Claude Code, Cursor, Codex, OpenCode and Zed. Codex reads 
 - Editing the copy in `.claude/skills/` without editing the source breaks the check.
 - `.opencode/skills` is not used: OpenCode reads `.agents/skills`.
 - Council and thread role skills live in `.agents/roles/`, which no tool lists and `./cc agents sync` does not copy; only the runners load them ([0019](0019-lean-agent-context.md)).
-- `./cc agents sync` also writes the `hooks` key of `.claude/settings.json`; hooks are Claude Code only ([0013](0013-rule-hooks.md)).
+- `./cc agents sync` also writes the `hooks` key of `.claude/settings.json` ([0013](0013-rule-hooks.md)) and the whole `.codex/hooks.json` ([0033](0033-codex-rule-hooks.md)); Cursor, OpenCode and Zed's own agent run no CC hooks.
 - Zed's own agent runs no hooks, so in Zed the CC is used through Claude Code or Codex. If the ACP adapter stops loading project settings or renames tools, the hooks stop firing there without an error.

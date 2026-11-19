@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "review-learner",
   "purpose": "Groups the accepted review comments of merged PRs into candidate review lessons and marks those that repeat a known lesson (./cc prs learn)",
-  "provider": "claude",
-  "model": "claude-opus-5-5",
+  "provider": "cursor",
+  "model": "grok-4.7-high",
   "access": "read-only",
   "skills": [
     "review-learner"

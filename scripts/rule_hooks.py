@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Claude Code hooks that enforce the AGENTS.md hard rules at the moment of a tool call.
+"""Claude Code and Codex hooks that enforce the AGENTS.md hard rules at the moment of a tool call.
 
-Usage: rule_hooks.py <pre-bash|pre-read|post-read|pre-edit|post-edit|stop|session-start>, with the hook's JSON on stdin.
+Usage: rule_hooks.py <pre-bash|pre-read|post-read|pre-edit|post-edit|stop|session-start|codex-pre-tool|codex-post-tool>,
+with the hook's JSON on stdin. Codex uses codex-pre-tool and codex-post-tool, and the same stop and session-start.
 session-start is not a rule: it starts the setup interview in a CC that is not set up (docs/kit/decisions/0018-setup-starts-itself.md).
-The gates (./cc check, ./cc verify) stay the source of truth: a hook only catches a break early,
-and only in Claude Code. See docs/kit/decisions/0013-rule-hooks.md.
+The gates (./cc check, ./cc verify) stay the source of truth: a hook only catches a break early.
+See docs/kit/decisions/0013-rule-hooks.md and 0033-codex-rule-hooks.md.
 """
 
 from __future__ import annotations
@@ -579,6 +580,86 @@ def stop(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
                                           + "\n".join(f"- {problem}" for problem in problems[:10])}
 
 
+# Codex (docs/kit/decisions/0033-codex-rule-hooks.md) sends shell commands as Bash and every edit as one apply_patch
+# text in tool_input.command, and it runs a command whose hook answers ask without a word (probed 2026-11-18). So each
+# file of a patch is checked as its own Claude edit, and an ask becomes a deny that tells the agent what to do instead.
+PATCH_FILE = re.compile(r"^\*\*\* (Add|Update|Delete) File: (.+)$")
+PATCH_MOVE = "*** Move to: "
+CODEX_ASK = (" Codex cannot ask the user at this point, so the hook denies it: ask the user in chat, and if they agree, "
+             "give them the exact command or change to run themselves.")
+
+
+def parse_patch(text: str) -> list[dict[str, Any]]:
+    """The files of an apply_patch text: operation, path, move target, and the removed and added lines."""
+    changes: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        header = PATCH_FILE.match(line)
+        if header:
+            changes.append({"op": header.group(1).lower(), "path": header.group(2).rstrip("\r"), "move_to": None,
+                            "removed": "", "added": ""})
+        elif changes and line.startswith(PATCH_MOVE):
+            changes[-1]["move_to"] = line[len(PATCH_MOVE):].rstrip("\r")
+        elif changes and not line.startswith("*** "):
+            if line.startswith("-"):
+                changes[-1]["removed"] += line[1:] + "\n"
+            elif line.startswith("+"):
+                changes[-1]["added"] += line[1:] + "\n"
+    return changes
+
+
+def patch_edits(event: dict[str, Any]) -> list[dict[str, Any]]:
+    """Each file of a Codex patch as the Claude edit event the rules know: an add is a Write, an update an Edit of the
+    removed to the added lines, a delete (or the source of a move) an empty overwrite, a move target a Write."""
+    edits = []
+    for change in parse_patch(event.get("tool_input", {}).get("command", "")):
+        if change["op"] == "add":
+            edits.append(("Write", change["path"], {"content": change["added"]}))
+        elif change["op"] == "delete" or change["move_to"]:
+            edits.append(("Edit", change["path"], {"content": ""}))
+        else:
+            edits.append(("Edit", change["path"], {"old_string": change["removed"], "new_string": change["added"]}))
+        if change["move_to"]:
+            edits.append(("Write", change["move_to"], {"content": change["added"]}))
+    return [{**event, "tool_name": tool, "tool_input": {"file_path": path, **fields}} for tool, path, fields in edits]
+
+
+def codex_pre_tool(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
+    tool = event.get("tool_name")
+    if tool == "Bash":
+        results = [pre_bash(event, root)]
+    elif tool in ("apply_patch", "Edit", "Write"):
+        results = [pre_edit(edit, root) for edit in patch_edits(event)]
+    else:
+        return None
+    found = [result for result in results if result]
+    if not found:
+        return None
+    denied = [result for result in found if result["hookSpecificOutput"]["permissionDecision"] == "deny"]
+    if denied:
+        return denied[0]
+    return pre_tool("deny", found[0]["hookSpecificOutput"]["permissionDecisionReason"] + CODEX_ASK)
+
+
+def codex_post_tool(event: dict[str, Any], root: Path = ROOT) -> dict[str, Any] | None:
+    """Knowledge feedback for every note a patch wrote. Codex reads files through Bash, so the reference-repo reminder
+    of post-read has no Codex form."""
+    if event.get("tool_name") not in ("apply_patch", "Edit", "Write"):
+        return None
+    reasons = []
+    for change in parse_patch(event.get("tool_input", {}).get("command", "")):
+        if change["op"] == "delete":
+            continue
+        written = change["move_to"] or change["path"]
+        result = post_edit({**event, "tool_name": "Edit", "tool_input": {"file_path": written}}, root)
+        if result:
+            reasons.append(result["reason"])
+    if not reasons:
+        return None
+    reason = "\n".join(reasons)
+    return {"decision": "block", "reason": reason,
+            "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": reason}}
+
+
 SETUP_CONTEXT = {
     "discovery": "This Control Center is not set up yet. Unless the user asks for something else, open with the setup "
                  "interview: load the grill-cc-bootstrap skill (mode: new, already materialized by cc-kit) and start "
@@ -623,7 +704,7 @@ def setup_next_step(root: Path) -> str:
 
 
 HANDLERS = {"pre-bash": pre_bash, "pre-read": pre_read, "post-read": post_read, "pre-edit": pre_edit, "post-edit": post_edit,
-            "stop": stop, "session-start": session_start}
+            "stop": stop, "session-start": session_start, "codex-pre-tool": codex_pre_tool, "codex-post-tool": codex_post_tool}
 
 
 def main() -> int:

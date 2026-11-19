@@ -113,6 +113,114 @@ def check_writer_history(base: Path) -> None:
     assert "- Files it changed: none" in history.split("## Attempt 2")[1], "an attempt that changed nothing says so"
 
 
+def check_writer_choice(base: Path) -> None:
+    """The writer follows the winning proposal's provider; with no writing winner (Grok, HYBRID) it is the provider
+    that used fewer new input and output tokens in 7 days. It is chosen once and kept for every attempt."""
+    writers = {"claude": "writer", "codex": "writer-gpt"}
+    provider = {"proposer-claude": "claude", "proposer-gpt": "codex", "proposer-grok": "cursor"}.get
+    labels = {"A": "proposer-gpt", "B": "proposer-claude", "C": "proposer-grok"}
+    quiet_codex = {"claude": {"input": 900, "cached": 10**7, "output": 100}, "codex": {"input": 100, "cached": 0, "output": 50}}
+
+    def choose(writer, usage=quiet_codex, **state):
+        return council_run.choose_writer({"writer": writer}, {"labels": labels, **state}, provider, usage)
+
+    assert choose(writers, decision="A")[0] == "writer-gpt", "GPT's proposal: GPT writes, even if it used more"
+    assert choose(writers, decision="B", usage={"codex": {"input": 0, "output": 0}})[0] == "writer", "Claude's proposal"
+    role, reason = choose(writers, decision="C")
+    assert role == "writer-gpt" and "cursor" in reason and "codex" in reason and "150" in reason, (role, reason)
+    assert choose(writers, decision="HYBRID", usage={"codex": {"input": 5000, "output": 1}, "claude": {"input": 10, "output": 1}})[0] \
+        == "writer", "no single winner: the provider that used fewer tokens; cached tokens do not count"
+    assert choose(writers, decision="HYBRID", usage={"claude": {"input": 100, "cached": 0, "output": 0},
+                                                     "codex": {"input": 50, "cached": 1000, "output": 0}})[0] == "writer-gpt", \
+        "cached tokens cost little quota: 50 new tokens is less use than 100, however much was cached"
+    assert choose(writers, decision="B", pick="a")[0] == "writer-gpt", "the user's pick decides, not the judge's"
+    assert choose(writers, decision="HYBRID", usage={})[0] == "writer", "a tie (no data) goes to the first writer listed"
+    assert choose("writer", decision="A") == ("writer", "the council's only writer"), "older catalogs name one writer"
+
+    worktree = base / "choice-worktree"
+    worktree.mkdir()
+    subprocess.run(["git", "init", "-q", str(worktree)], check=True)
+    (worktree / "app.py").write_text("base\n")
+    subprocess.run(["git", "-C", str(worktree), "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(worktree), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "b"], check=True)
+    run = make_run(base, "choice")
+    for identifier, cli in (("writer", "claude"), ("writer-gpt", "codex"), ("proposer-gpt", "codex"), ("proposer-claude", "claude")):
+        (run.root / "catalog" / "agents" / f"{identifier}.json").write_text(json.dumps(
+            {"id": identifier, "provider": cli, "model": "m", "access": "write-worktree", "skills": []}))
+    run.save(worktree=str(worktree), instructions="Fix it.", labels={"A": "proposer-gpt", "B": "proposer-claude"}, decision="A")
+    asked: list[int] = []
+    real_usage = council_run.stats.provider_usage
+    council_run.stats.provider_usage = lambda root, days=7: asked.append(1) or {}
+    called: list[str] = []
+
+    def writer(role, prompt, cwd, log, timeout=3600, on_say=None):
+        called.append(role["id"])
+        (worktree / "app.py").write_text(f"try {len(called)}\n")
+        return "done"
+    providers.run = writer
+    run.verify = lambda name: (len(called) == 3, VERIFY_FAILS, council_run.verify_rows(VERIFY_FAILS))
+    run.write_and_verify({"writer": writers, "maxRetries": 2, "judge": "judge", "security": None})
+    council_run.stats.provider_usage = real_usage
+    assert called == ["writer-gpt"] * 3, "every attempt is the writer chosen at the start"
+    assert run.state["writer"] == "writer-gpt" and "proposal A" in run.state["writerReason"], run.state
+    assert "- Writer: writer-gpt (codex m)" in (run.directory / "attempts.md").read_text()
+
+
+def check_show_verdict(base: Path) -> None:
+    """The verdict shown for approval names the judge's model and warns when a proposer shares it."""
+    import io
+    from contextlib import redirect_stdout
+    run = make_run(base, "show-verdict")
+    for identifier, cli, model in (("proposer-claude", "claude", "claude-opus-5-5"), ("proposer-grok", "cursor", "grok-4.7-high")):
+        (run.root / "catalog" / "agents" / f"{identifier}.json").write_text(json.dumps(
+            {"id": identifier, "provider": cli, "model": model, "access": "read-only", "skills": []}))
+    (run.directory / "verdict.md").write_text("DECISION: B\n")
+    run.save(labels={"A": "proposer-claude", "B": "proposer-grok"},
+             calls=[{"step": "verdict", "role": "judge", "provider": "cursor", "model": "grok-4.7-high"}])
+    out = io.StringIO()
+    with redirect_stdout(out):
+        run.show_verdict()
+    assert "Judge: judge (cursor grok-4.7-high), the same model as proposer-grok" in out.getvalue(), out.getvalue()
+
+
+def check_diff_checks() -> None:
+    """A diff that weakens tests is flagged for the security reviewers; one that adds a secret is caught."""
+    diff = (
+        "diff --git a/tests/test_app.py b/tests/test_app.py\n--- a/tests/test_app.py\n+++ b/tests/test_app.py\n"
+        "@@ -1,9 +1,6 @@\n-def test_zero():\n-    assert parse(0) == 0\n+@pytest.mark.skip(reason='flaky')\n def test_one():\n"
+        "-    assert parse(1) == 1\n+    parse(1)\n"
+        "diff --git a/web/app.spec.ts b/web/app.spec.ts\n--- a/web/app.spec.ts\n+++ b/web/app.spec.ts\n"
+        "@@ -1 +1 @@\n-  it('parses', () => expect(parse(1)).toBe(1))\n+  it.skip('parses', () => expect(parse(1)).toBe(1))\n"
+        "diff --git a/app.py b/app.py\n--- a/app.py\n+++ b/app.py\n@@ -1 +1 @@\n-    assert x\n+    pass\n"
+    )
+    warnings = council_run.weakened_tests(diff)
+    assert any("tests/test_app.py" in w and "removed test" in w for w in warnings), warnings
+    assert any("tests/test_app.py" in w and "skip" in w for w in warnings), warnings
+    assert any("tests/test_app.py" in w and "fewer asserts" in w for w in warnings), warnings
+    assert any("web/app.spec.ts" in w and "skip" in w for w in warnings), warnings
+    assert not any(w.startswith("app.py:") for w in warnings), "production code is not a test file"
+    assert council_run.weakened_tests("diff --git a/tests/t.py b/tests/t.py\n+def test_new():\n+    assert f()\n") == []
+
+    for secret in ("AKIAABCDEFGHIJKLMNOP", "-----BEGIN OPENSSH PRIVATE KEY-----", "ghp_" + "a" * 36,
+                   "sk-ant-api03-" + "x" * 40, "xoxb-12345-abcdef-ghijkl"):
+        found = council_run.added_secrets(f"diff --git a/c.py b/c.py\n+TOKEN = '{secret}'\n")
+        assert found and "c.py" in found[0], (secret, found)
+    assert council_run.added_secrets("diff --git a/c.py b/c.py\n-TOKEN = 'AKIAABCDEFGHIJKLMNOP'\n+TOKEN = os.environ['T']\n") == [], \
+        "a removed secret is good news"
+    assert council_run.parse_verdict("I checked both.\n\nVERDICT: GO-WITH-CONDITIONS\n") == "GO-WITH-CONDITIONS", \
+        "the verdict line need not be first (risk run 20261118-122527-risk)"
+    assert council_run.parse_verdict("The verdict is GO, I think.") is None, "a mention in prose is not a verdict line"
+
+    # The judge's model is shown with the verdict, and a judge on a proposer's model is named as such (risk R14).
+    judge = {"id": "judge", "provider": "cursor", "model": "grok-4.7-high"}
+    grok = {"id": "proposer-grok", "provider": "cursor", "model": "grok-4.7-high"}
+    claude = {"id": "proposer-claude", "provider": "claude", "model": "claude-opus-5-5"}
+    note = council_run.judge_note(judge, [claude, grok])
+    assert note.startswith("Judge: judge (cursor grok-4.7-high)") and "same model as proposer-grok" in note, note
+    assert "may favour" in note, note
+    assert council_run.judge_note(judge, [claude]) == "Judge: judge (cursor grok-4.7-high)"
+
+
 def check_catalog_rules() -> None:
     """The shipped templates validate, a writing Cursor role does not, and security takes a list or one role."""
     template = Path(__file__).resolve().parent.parent.parent
@@ -159,7 +267,35 @@ def check_catalog_rules() -> None:
             assert errors() == [], (model, errors())
         sceptic.write_text(json.dumps(pinned))
 
+        # Work spread over three model families (docs/kit/decisions/0034-council-load-balance.md): coding proposals and
+        # debug diagnoses come from Claude, GPT and Grok; the risk judge is GPT and the review learner Grok.
+        def provider(role: str) -> str:
+            return json.loads((root / "catalog" / "agents" / f"{role}.json").read_text())["provider"]
+        for council_file, roles in (("coding", ["proposer-claude", "proposer-gpt", "proposer-grok"]),
+                                    ("debug", ["investigator-claude", "investigator-gpt", "investigator-grok"])):
+            proposers = json.loads((root / "catalog" / "councils" / f"{council_file}.json").read_text())["proposers"]
+            assert proposers == roles and [provider(role) for role in roles] == ["claude", "codex", "cursor"], (council_file, proposers)
+        for role, cli, skills in (("proposer-grok", "cursor", ["lean-code", "council-propose"]),
+                                  ("investigator-grok", "cursor", ["debug", "council-investigate"])):
+            data = json.loads((root / "catalog" / "agents" / f"{role}.json").read_text())
+            assert (data["provider"], data["access"], data["skills"]) == (cli, "read-only", skills), data
+        assert (provider("risk-judge"), json.loads((root / "catalog" / "agents" / "risk-judge.json").read_text())["access"]) \
+            == ("codex", "read-only-web"), "the risk judge searches the web, so it runs on Codex"
+        assert provider("review-learner") == "cursor"
+
+        # The writer: one write-worktree role per provider that can write, or (older catalogs) one role.
         data = json.loads(coding.read_text())
+        assert data["writer"] == {"claude": "writer", "codex": "writer-gpt"}, data["writer"]
+        for council_file in ("coding", "debug", "testing"):
+            assert json.loads((root / "catalog" / "councils" / f"{council_file}.json").read_text())["writer"] == data["writer"]
+        for writer_value, valid in (("writer", True), ({"codex": "writer-gpt"}, True), ({}, False), ({"cursor": "writer"}, False),
+                                    ({"claude": "writer-gpt"}, False), ({"claude": "proposer-claude"}, False), (["writer"], False)):
+            coding.write_text(json.dumps({**data, "writer": writer_value}))
+            assert (errors() == []) == valid, (writer_value, errors())
+        coding.write_text(json.dumps(data))
+        gpt_writer = json.loads((root / "catalog" / "agents" / "writer-gpt.json").read_text())
+        assert (gpt_writer["provider"], gpt_writer["access"]) == ("codex", "write-worktree"), gpt_writer
+
         for security, valid in (("security-claude", True), (None, True), ([], True), (["security-grok", "security-grok"], False),
                                 (["writer"], False), (["nobody"], False), ({"a": 1}, False)):
             coding.write_text(json.dumps({**data, "security": security}))
@@ -241,6 +377,8 @@ def check_risk_council(base: Path) -> None:
     assert run.state["stage"] == "failed" and "VERDICT" in run.state["summary"], run.state
     run, _ = assess("risk-no-go", {"risk-a": "R1", "risk-b": "R2", "risk-judge": "VERDICT: NO-GO\n\nbreaks the contract"})
     assert run.state["decision"] == "NO-GO", "NO-GO is not read as GO"
+    run, _ = assess("risk-preamble", {"risk-a": "R1", "risk-b": "R2", "risk-judge": "I checked both.\n\nVERDICT: GO\n\n## Summary"})
+    assert run.state["stage"] == "done" and run.state["decision"] == "GO", "a sentence before the verdict line is fine"
 
 
 def check_review_lessons(base: Path) -> None:
@@ -301,10 +439,22 @@ def main() -> int:
         assert reason == "security review blocks the change; see security.md"
 
         check_writer_history(base)
+        check_writer_choice(base)
+        check_show_verdict(base)
         check_review_lessons(base)
         check_risk_council(base)
 
     check_catalog_rules()
+    check_diff_checks()
+    # A model the account lacks fails the run before the first call spends tokens; an empty list (logged out,
+    # or a CLI that cannot list) is the login check's business, not a reason to refuse.
+    asked: list[str] = []
+    listed = {"claude": ["claude-opus-5-5"], "codex": ["gpt-6.1-sol"], "cursor": []}
+    roles = [{"id": "writer-gpt", "provider": "codex", "model": "gpt-9"}, {"id": "writer", "provider": "claude", "model": "claude-opus-5-5"},
+             {"id": "judge", "provider": "cursor", "model": "grok-4.7-high"}, {"id": "proposer-gpt", "provider": "codex", "model": "gpt-6.1-sol"}]
+    missing = council_run.unavailable_models(roles, lambda provider: asked.append(provider) or listed[provider])
+    assert missing == ["role writer-gpt: codex has no model gpt-9 (available: gpt-6.1-sol)"], missing
+    assert sorted(asked) == ["claude", "codex", "cursor"], "each provider's list is read once"
     used = {"input": 10_000, "cached": 30_000, "output": 2_000}
     calls = [{"finishedAt": "t", "usage": used}, {"finishedAt": "t", "usage": used}, {"startedAt": "t"}]
     assert council_run.run_tokens({"calls": calls}) == "84.0k tokens (20.0k new input, 60.0k cached, 4.0k output) in 2 calls", \

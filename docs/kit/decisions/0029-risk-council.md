@@ -23,6 +23,7 @@ evidence:
 relations:
   - docs/kit/index.md
   - docs/kit/decisions/0007-agent-councils.md
+  - docs/kit/decisions/0034-council-load-balance.md
   - docs/kit/decisions/0014-cursor-provider-and-security-council.md
   - docs/kit/decisions/0025-verifier-evidence-and-self-contained-briefs.md
   - docs/kit/decisions/0028-verify-before-push.md
@@ -44,7 +45,7 @@ Asked about a change such as replacing TEI with PyTorch for embeddings, an agent
   - **Evidence** ([0025](0025-verifier-evidence-and-self-contained-briefs.md)): every risk cites a `path:line`, a note or a URL, or is an `ASSUMPTION` with the cheapest way to settle it.
 - **Independence and judging**: assessors do not see each other; the judge (`council-risk-judge`) sees them as shuffled labels, checks every claim, merges duplicates, keeps a risk only one assessor found, and cannot lower a severity 4 or 5 or drop a risk without refuting evidence. Its first line is the verdict; a reply without one fails the run.
 - **Web access**: `read-only-web` is a new access level: Claude gets WebSearch and WebFetch (also allowed explicitly, since `dontAsk` denies them otherwise), Codex gets `web_search="live"` in its read-only sandbox. Only a risk council's assessors and judge may have it. Cursor roles stay `read-only`; Cursor's own web search is not switched by the CC.
-- The default council is a Claude and a GPT assessor, both with web search, and a Claude judge with web, so it can check cited sources. A Grok assessor (Cursor) was left out after the first real run (2026-10-28): it took 15 minutes against 2 to 3 for the others. A CC can add it back as a `read-only` Cursor role.
+- The default council is a Claude and a GPT assessor, both with web search, and a judge with web, so it can check cited sources; the judge was Claude and is GPT since 2026-11-18, to spread the load ([0034](0034-council-load-balance.md)). A Grok assessor (Cursor) was left out after the first real run (2026-10-28): it took 15 minutes against 2 to 3 for the others. A CC can add it back as a `read-only` Cursor role.
 - **When**: `cc-risk` and AGENTS.md make agents offer it before planning such a change, and never answer with risks from memory. `grill-task-planning` turns the register into failure modes, spike work packages and completion checks, which ties into running the change itself ([0028](0028-verify-before-push.md)).
 
 ## Options considered

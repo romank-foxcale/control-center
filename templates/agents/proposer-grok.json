@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "proposer-grok",
+  "purpose": "Proposes an implementation approach without editing",
+  "provider": "cursor",
+  "model": "grok-4.7-high",
+  "access": "read-only",
+  "skills": [
+    "lean-code",
+    "council-propose"
+  ]
+}

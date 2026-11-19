@@ -52,7 +52,75 @@ emit({{"type": "result", "subtype": "success", "result": "I'll check the code fi
 """
 
 
+# The fake codex does what codex-cli 0.160.1 did in a workspace-write call (2026-11-18): it adds a trust entry for the
+# folder's repository to $CODEX_HOME/config.toml, after the last table, inside a comment block a tool wrote there.
+FAKE_CODEX = f"""#!{sys.executable}
+import json, os, subprocess, sys
+from pathlib import Path
+if sys.argv[1:3] == ["login", "status"]:
+    print("Logged in using ChatGPT")
+    sys.exit(0)
+cwd = Path(sys.argv[sys.argv.index("--cd") + 1])
+common = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                        capture_output=True, text=True).stdout.strip()
+trusted = Path(common).parent if common else cwd
+config = Path(os.environ["CODEX_HOME"]) / "config.toml"
+text = config.read_text()
+entry = f'[projects."{{trusted}}"]\\ntrust_level = "trusted"\\n'
+if entry not in text:
+    text = text.replace("# --- end tool block ---", entry + "# --- end tool block ---")
+    # Another process (the user in their own Codex) trusts some other folder while the call runs.
+    text += os.environ.get("FAKE_CODEX_ALSO", "")
+    config.write_text(text)
+Path(sys.argv[sys.argv.index("--output-last-message") + 1]).write_text("done")
+print(json.dumps({{"type": "item.completed", "item": {{"type": "agent_message", "text": "done"}}}}), flush=True)
+print(json.dumps({{"type": "turn.completed", "usage": {{"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 1}}}}), flush=True)
+"""
+
+
+def check_codex_trust_entries(base: Path) -> None:
+    """A Codex call leaves ~/.codex/config.toml as it found it: the trust entry it added for the worktree's repository
+    is removed, while entries the user had, and everything else in the file, stay byte for byte (R19)."""
+    bin_dir = base / "codex-bin"
+    bin_dir.mkdir()
+    (bin_dir / "codex").write_text(FAKE_CODEX)
+    (bin_dir / "codex").chmod(0o755)
+    home = base / "codex-home"
+    home.mkdir()
+    clone = base / "repos" / "project" / "calc"
+    subprocess.run(["git", "init", "-q", str(clone)], check=True)
+    (clone / "a.py").write_text("x = 1\n")
+    git = ["git", "-C", str(clone), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
+    worktree = base / "worktrees" / "f" / "calc_wt"
+    subprocess.run([*git, "worktree", "add", "-q", str(worktree), "-b", "f"], check=True)
+    before = ('model = "gpt-6.1-sol"\n\n[projects."/home/u/mine"]\ntrust_level = "trusted"\n'
+              '# --- start tool block ---\n[mcp_servers.tool]\ncommand = "tool"\n# --- end tool block ---\n\n'
+              '[hooks.state."/home/u/.codex/hooks.json:stop:0:0"]\ntrusted_hash = "sha256:ab"\n')
+    config = home / "config.toml"
+    config.write_text(before)
+    os.environ.update({"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "CODEX_HOME": str(home)})
+    writer = {"id": "writer-gpt", "provider": "codex", "model": "gpt-6.1-sol", "access": "write-worktree"}
+    assert providers.run(writer, "Fix it.", worktree, base / "logs" / "write-0.log") == "done"
+    assert config.read_text() == before, config.read_text()
+
+    # A folder the user had trusted before the call stays trusted.
+    mine = before.replace("/home/u/mine", str(clone))
+    config.write_text(mine)
+    providers.run(writer, "Fix it.", worktree, base / "logs" / "write-1.log")
+    assert config.read_text() == mine, config.read_text()
+
+    # A folder someone else trusts during the call is not the call's to remove.
+    config.write_text(before)
+    os.environ["FAKE_CODEX_ALSO"] = '\n[projects."/home/u/other"]\ntrust_level = "trusted"\n'
+    providers.run(writer, "Fix it.", worktree, base / "logs" / "write-2.log")
+    assert config.read_text() == before + os.environ.pop("FAKE_CODEX_ALSO"), config.read_text()
+
+
 def main() -> int:
+    with tempfile.TemporaryDirectory() as directory:
+        check_codex_trust_entries(Path(directory))
     with tempfile.TemporaryDirectory() as directory:
         base = Path(directory)
         bin_dir = base / "bin"

@@ -21,7 +21,7 @@ While `control-center.json` has status `discovery` or `adapting`, the CC is not 
 - `docs/kit/` belongs to the kit and is never edited in a CC. To change kit behaviour, record a decision in `docs/decisions/` that names the kit decision it overrides.
 - Production actions need a dedicated adapter, a check and the user's confirmation. Never store secrets, full conversations or your internal reasoning.
 - Write everything stored here in English, whatever language the conversation uses.
-- In Claude Code, hooks enforce several of these rules at the tool call. A deny or ask is the rule speaking: fix the action, never work around the hook.
+- In Claude Code and Codex, hooks enforce several of these rules at the tool call. A deny or ask is the rule speaking: fix the action, never work around the hook.
 
 ## Knowledge notes
 

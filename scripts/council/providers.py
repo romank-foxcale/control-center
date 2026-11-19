@@ -263,6 +263,24 @@ def run(
     available, detail = login_status(role["provider"])
     if not available:
         raise ProviderError(f"role {role['id']}: {role['provider']} {detail}")
+    if role["provider"] == "codex":
+        # A workspace-write call adds a trust entry for its repository to the user's Codex config, and a trusted
+        # folder would load the CC's hooks in a later chat there. Leave the file as it was (R19, 0034).
+        config, keys = codex_config(), codex_trust_keys(cwd)
+        before = config.read_text(encoding="utf-8") if config.is_file() else ""
+        try:
+            return stream_call(role, prompt, cwd, log, timeout, on_say)
+        finally:
+            try:
+                after = config.read_text(encoding="utf-8") if config.is_file() else ""
+                cleaned = remove_added_trust(before, after, keys)
+                if cleaned != after:
+                    temporary = config.with_name(f".{config.name}.cc-{os.getpid()}")
+                    temporary.write_text(cleaned, encoding="utf-8", newline="")
+                    os.replace(temporary, config)
+            except OSError as error:
+                with log.open("a", encoding="utf-8") as stream:
+                    stream.write(f"warning: could not remove the trust entry codex added to {config}: {error}\n")
     if role["provider"] != "cursor":
         return stream_call(role, prompt, cwd, log, timeout, on_say)
     if shared is not None:
@@ -276,6 +294,38 @@ def run(
         return reply
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
+
+
+def codex_config() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "config.toml"
+
+
+def codex_trust_keys(cwd: Path) -> set[str]:
+    """The `[projects."<path>"]` headers Codex may add for a call in cwd: the folder itself, its repository and, for a
+    worktree, the repository it belongs to (a writer in a feature worktree added the base clone's, 2026-11-18)."""
+    paths = {cwd.resolve()}
+    for option in ("--show-toplevel", "--git-common-dir"):
+        found = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--path-format=absolute", option],
+                               capture_output=True, text=True).stdout.strip()
+        if found:
+            paths.add(Path(found).resolve().parent if option == "--git-common-dir" else Path(found).resolve())
+    return {f'[projects."{path}"]' for path in paths}
+
+
+def remove_added_trust(before: str, after: str, keys: set[str]) -> str:
+    """after without the trust tables of keys that before did not have: only the header and its key lines go, so
+    comments and other tables around them stay as they were."""
+    added = {key for key in keys if key in after.splitlines() and key not in before.splitlines()}
+    kept, dropping = [], False
+    for line in after.splitlines(keepends=True):
+        if line.strip() in added:
+            dropping = True
+            continue
+        if dropping and re.match(r"\s*[A-Za-z0-9_\-\"]+\s*=", line):
+            continue
+        dropping = False
+        kept.append(line)
+    return "".join(kept)
 
 
 def stop(process: subprocess.Popen[str]) -> None:

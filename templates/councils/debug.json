@@ -2,14 +2,18 @@
   "schemaVersion": 1,
   "id": "debug",
   "kind": "debug",
-  "purpose": "Two models diagnose a failure independently, an anonymous judge picks the best-evidenced root cause, the user approves, the writer adds a reproduction test that must fail and then fixes the root cause",
+  "purpose": "Three models diagnose a failure independently, an anonymous judge picks the best-evidenced root cause, the user approves, the writer adds a reproduction test that must fail and then fixes the root cause",
   "proposers": [
     "investigator-claude",
-    "investigator-gpt"
+    "investigator-gpt",
+    "investigator-grok"
   ],
   "judge": "judge",
   "approval": true,
-  "writer": "writer",
+  "writer": {
+    "claude": "writer",
+    "codex": "writer-gpt"
+  },
   "maxRetries": 2,
   "security": [
     "security-claude",

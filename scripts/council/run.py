@@ -16,10 +16,11 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import progress
 import providers
+import stats
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import events  # noqa: E402
@@ -158,6 +159,121 @@ def worktree_diff(worktree: Path) -> str:
         )
         diff += result.stdout
     return diff
+
+
+def choose_writer(council: dict[str, Any], state: dict[str, Any], provider_of: Callable[[str], str | None],
+                  usage: dict[str, dict[str, int]]) -> tuple[str, str]:
+    """The writer role and why (docs/kit/decisions/0034-council-load-balance.md). The provider of the winning proposal
+    (the user's --pick over the judge's) writes it; when that provider cannot write (Cursor) or there is no single winner
+    (HYBRID), the writer is the provider that used fewer new input and output tokens in the last 7 days. Cached tokens
+    are left out, and a call that never reported counts as nothing, so the measure is a lower bound; a tie goes to the
+    first writer listed."""
+    writers = council["writer"]
+    if isinstance(writers, str):
+        return writers, "the council's only writer"
+    label = str(state.get("pick") or state.get("decision") or "").upper()
+    proposer = (state.get("labels") or {}).get(label)
+    provider = provider_of(proposer) if proposer else None
+    source = f"proposal {label}{' (the user pick)' if state.get('pick') else ''}"
+    if provider in writers:
+        return writers[provider], f"{source} came from {provider}"
+
+    def used(name: str) -> int:
+        row = usage.get(name) or {}
+        return int(row.get("input", 0)) + int(row.get("output", 0))
+
+    names = list(writers)
+    chosen = min(names, key=lambda name: (used(name), names.index(name)))
+    why = (f"{source} came from {provider}, which cannot write" if provider
+           else f"the verdict {state.get('decision')} has no single winner")
+    spent = ", ".join(f"{name} {used(name)}" for name in names)
+    return writers[chosen], f"{why}; {chosen} used the fewest new input and output tokens in 7 days ({spent})"
+
+
+def diff_files(diff: str) -> dict[str, tuple[list[str], list[str]]]:
+    """Removed and added lines of a git diff, per file (the b/ path)."""
+    files: dict[str, tuple[list[str], list[str]]] = {}
+    current = None
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            current = files.setdefault(line.rsplit(" b/", 1)[-1], ([], []))
+        elif current is None or line.startswith(("--- ", "+++ ")):
+            continue
+        elif line.startswith("-"):
+            current[0].append(line[1:])
+        elif line.startswith("+"):
+            current[1].append(line[1:])
+    return files
+
+
+TEST_FILE = re.compile(r"(^|/)(tests?|spec|specs|__tests__)/|(^|/)test_[^/]*$|_test\.[^/]+$|\.(test|spec)\.[^/]+$|Tests?\.(java|cs|kt)$")
+TEST_DEFINITION = re.compile(r"^\s*(def test_|async def test_|func Test|fn test_|(it|test|describe)\(|@Test\b|#\[test\])")
+TEST_SKIP = re.compile(r"mark\.skip|mark\.xfail|@skip|unittest\.skip|\.skip\(|\bxit\(|\bxdescribe\(|t\.Skip\(|#\[ignore\]|@Disabled|@Ignore")
+ASSERTION = re.compile(r"\bassert|\bexpect\(|\bshould\b|t\.(Error|Fatal)|\brequire\.")
+
+
+def weakened_tests(diff: str) -> list[str]:
+    """Signs that a change weakened tests instead of fixing code: removed tests, new skips, fewer assertions.
+    A hint for the security reviewers and the user, never a verdict."""
+    warnings = []
+    for path, (removed, added) in diff_files(diff).items():
+        if not TEST_FILE.search(path):
+            continue
+        gone = sum(bool(TEST_DEFINITION.search(line)) for line in removed) - sum(bool(TEST_DEFINITION.search(line)) for line in added)
+        if gone > 0:
+            warnings.append(f"{path}: {gone} removed test definition(s)")
+        skips = sum(bool(TEST_SKIP.search(line)) for line in added) - sum(bool(TEST_SKIP.search(line)) for line in removed)
+        if skips > 0:
+            warnings.append(f"{path}: {skips} new skip or expected-failure marker(s)")
+        fewer = sum(bool(ASSERTION.search(line)) for line in removed) - sum(bool(ASSERTION.search(line)) for line in added)
+        if fewer > 0:
+            warnings.append(f"{path}: {fewer} fewer asserts")
+    return warnings
+
+
+SECRETS = {
+    "AWS access key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    "private key": re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    "GitHub token": re.compile(r"\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{20,}"),
+    "Anthropic or OpenAI key": re.compile(r"\bsk-(ant-)?[A-Za-z0-9_-]{32,}"),
+    "Slack token": re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
+}
+
+
+def added_secrets(diff: str) -> list[str]:
+    """Lines a change adds that look like a credential: the CC keeps secrets in an external manager (AGENTS.md)."""
+    return [f"{path}: {name}" for path, (_, added) in diff_files(diff).items()
+            for name, pattern in SECRETS.items() if any(pattern.search(line) for line in added)]
+
+
+def unavailable_models(roles: list[dict[str, Any]], models_of: Callable[[str], list[str]]) -> list[str]:
+    """Roles whose model the provider does not offer, so a run fails before its first call spends tokens."""
+    listed: dict[str, list[str]] = {}
+    missing = []
+    for role in roles:
+        if role["provider"] not in listed:
+            listed[role["provider"]] = models_of(role["provider"])
+        offered = listed[role["provider"]]
+        if offered and role["model"] not in offered:
+            missing.append(f"role {role['id']}: {role['provider']} has no model {role['model']} (available: {', '.join(offered[:8])})")
+    return missing
+
+
+def judge_note(judge: dict[str, Any], proposers: list[dict[str, Any]]) -> str:
+    """The judge's model, and the proposers on the same model: such a judge may favour its own model's proposal
+    even through anonymous labels (risk R14), so the user weighs the verdict knowing it."""
+    note = f"Judge: {judge['id']} ({judge['provider']} {judge['model']})"
+    same = [role["id"] for role in proposers if (role["provider"], role["model"]) == (judge["provider"], judge["model"])]
+    if same:
+        note += (f", the same model as {', '.join(same)}: it may favour that proposal; compare with ./cc council stats "
+                 "and use --pick if you disagree")
+    return note
+
+
+def parse_verdict(summary: str) -> str | None:
+    """The risk judge's verdict: a line of its own, anywhere in the reply (a judge once wrote a sentence first)."""
+    match = re.search(r"(?m)^\s*VERDICT:\s*(GO-WITH-CONDITIONS|NO-GO|GO)\b", summary)
+    return match.group(1) if match else None
 
 
 def tail(output: str, lines: int = 200) -> str:
@@ -349,17 +465,24 @@ class Run:
 
     def write_and_verify(self, council: dict[str, Any]) -> None:
         self.save(stage="writing")
+        if not self.state.get("writer"):
+            # Chosen once and saved: every phase and retry, and a resumed run, keep the same writer.
+            chosen, why = choose_writer(council, self.state, lambda role: self.role(role)["provider"],
+                                        stats.provider_usage(self.root, days=7))
+            self.save(writer=chosen, writerReason=why)
+        writer_id = self.state["writer"]
         brief = self.state.get("brief") or f"# Task\n\n{self.state['task']}"
         instructions = f"{brief}\n\n# Approved instructions\n\n{self.state['instructions']}"
         source = f"proposal {self.state['pick'].upper()}" if self.state.get("pick") else f"{council['judge']} verdict"
-        self.handoff(f"{source}{' + user note' if '# User note' in self.state['instructions'] else ''} → {council['writer']}")
+        self.handoff(f"{source}{' + user note' if '# User note' in self.state['instructions'] else ''} → {writer_id} "
+                     f"({self.state.get('writerReason', '')})")
         phase = ""
         guarded: dict[str, bytes] = {}
         if self.state["kind"] == "debug":
             # Red first, enforced: the reproduction test must fail on the unfixed code.
             self.step("write test")
             self.call(
-                council["writer"],
+                writer_id,
                 f"{instructions}\n\n# Phase 1 of 2: reproduction test\n\n"
                 "Write only the failing reproduction test from the instructions. Do not change production code yet.",
                 "write-test",
@@ -385,7 +508,7 @@ class Run:
         )
         entries: list[str] = []
         history.write_text(title, encoding="utf-8")
-        writer = self.role(council["writer"])
+        writer = self.role(writer_id)
         while True:
             body = instructions + phase
             if failure:
@@ -400,7 +523,7 @@ class Run:
             self.step("fix" if self.state["kind"] == "debug" else "write")
             before, started, stopped = file_states(self.worktree), datetime.datetime.now(), False
             try:
-                reply = self.call(council["writer"], body, f"write-{attempt}")
+                reply = self.call(writer_id, body, f"write-{attempt}")
             except providers.ToolCapError:
                 # Half-done edits stay in the worktree: verify shows their state, and the next writer starts fresh.
                 reply, stopped = "", True
@@ -418,7 +541,7 @@ class Run:
             entry = [
                 f"## Attempt {attempt + 1} of {council['maxRetries'] + 1}: {outcome}",
                 "",
-                f"- Writer: {council['writer']} ({writer['provider']} {writer['model']}), "
+                f"- Writer: {writer_id} ({writer['provider']} {writer['model']}), "
                 f"{providers.tool_calls(self.directory / 'logs' / f'write-{attempt}.log')} tool calls, "
                 f"{providers.describe(providers.usage(self.directory / 'logs' / f'write-{attempt}.log'))}, {events.clock(seconds)}",
                 f"- Files it changed: {', '.join(changed) or 'none'}",
@@ -451,18 +574,28 @@ class Run:
             failure = tail(output)
             failed = ", ".join(f"{repo} {gate}" for repo, gate, result in rows if result.startswith("FAIL")) or "see log"
             self.events.emit("warn", f"verify failed ({failed}); retry {attempt} of {council['maxRetries']}")
-            self.handoff(f"verify failure + {len(entries)} earlier attempt(s) → {council['writer']} (retry {attempt})")
+            self.handoff(f"verify failure + {len(entries)} earlier attempt(s) → {writer_id} (retry {attempt})")
 
+        diff = (self.directory / "changes.diff").read_text(encoding="utf-8")
+        secrets = added_secrets(diff)
+        if secrets:
+            self.finish("blocked-security", f"the change adds what looks like a credential ({'; '.join(secrets)}); "
+                                            "see changes.diff, remove it and rotate it if it is real")
+            return
+        # A green verify after a weakened test proves little: the reviewers and the user see these first.
+        self.save(testWarnings=weakened_tests(diff))
         reviewers = progress.security_roles(council)
         if reviewers:
-            diff = (self.directory / "changes.diff").read_text(encoding="utf-8")
-            reason = self.review_security(council, reviewers, f"# Diff\n\n```diff\n{diff}\n```")
+            flagged = "".join(f"- {warning}\n" for warning in self.state["testWarnings"])
+            check = f"# Test changes to check\n\nThe writer may have weakened tests:\n\n{flagged}\n" if flagged else ""
+            reason = self.review_security(council, reviewers, f"{check}# Diff\n\n```diff\n{diff}\n```")
             if reason:
                 self.finish("blocked-security", reason)
                 return
         summary = "verify passed; review changes.diff and commit it yourself"
-        if self.state.get("qualityWarnings"):
-            summary += f"; WARNING: {'; '.join(self.state['qualityWarnings'])}"
+        warnings = [*self.state.get("qualityWarnings", []), *self.state["testWarnings"]]
+        if warnings:
+            summary += f"; WARNING: {'; '.join(warnings)}"
         self.finish("done", summary)
 
     def review_security(self, council: dict[str, Any], reviewers: list[str], diff: str) -> str:
@@ -530,13 +663,13 @@ class Run:
         finally:
             if shared:
                 shutil.rmtree(shared, ignore_errors=True)
-        verdict = re.match(r"\s*VERDICT:\s*(GO-WITH-CONDITIONS|NO-GO|GO)\b", summary)
+        verdict = parse_verdict(summary)
         say("Assessment authors (hidden from the judge): " + ", ".join(f"{label}: {identifier}" for label, identifier in labels.items()))
         if not verdict:
             self.finish("failed", "the judge reply has no VERDICT line; see risk.md")
             return
-        self.save(decision=verdict.group(1))
-        self.finish("done", f"verdict {verdict.group(1)}; read risk.md before planning or implementing")
+        self.save(decision=verdict)
+        self.finish("done", f"verdict {verdict}; read risk.md before planning or implementing")
 
     def finish(self, stage: str, summary: str) -> None:
         self.save(stage=stage, summary=summary, finishedAt=now())
@@ -551,6 +684,10 @@ class Run:
         for label, identifier in self.state["labels"].items():
             role = self.role(identifier)
             say(f"  {label}: {identifier} ({role['provider']} {role['model']})")
+        judge = next((call for call in self.state.get("calls", []) if call.get("step") == "verdict"), None)
+        if judge:
+            say(judge_note({"id": judge["role"], "provider": judge["provider"], "model": judge["model"]},
+                           [self.role(identifier) for identifier in self.state["labels"].values()]))
         say(f"\nAwaiting approval. Approve: ./cc council approve {self.state['id']} [--pick <label>] [--note <text>]")
         say(f"Reject: ./cc council reject {self.state['id']}")
 
@@ -676,12 +813,16 @@ def command_run(root: Path, args: argparse.Namespace) -> None:
     task = Path(args.task_file).read_text(encoding="utf-8") if args.task_file else args.task
     if not task or not task.strip():
         raise ValueError("give the task with --task or --task-file")
-    for slot in [*council["proposers"], council["judge"], council["writer"], *progress.security_roles(council)]:
-        if slot:
-            role = load_json(root / "catalog" / "agents" / f"{slot}.json")
-            available, detail = providers.login_status(role["provider"])
-            if not available:
-                raise ValueError(f"role {slot} needs {role['provider']}: {detail}")
+    writers = list(council["writer"].values()) if isinstance(council["writer"], dict) else [council["writer"]]
+    slots = dict.fromkeys(slot for slot in [*council["proposers"], council["judge"], *writers, *progress.security_roles(council)] if slot)
+    roles = [load_json(root / "catalog" / "agents" / f"{slot}.json") for slot in slots]
+    for role in roles:
+        available, detail = providers.login_status(role["provider"])
+        if not available:
+            raise ValueError(f"role {role['id']} needs {role['provider']}: {detail}")
+    missing = unavailable_models(roles, providers.models)
+    if missing:
+        raise ValueError("; ".join(missing) + "; change the model with ./cc council set-role")
 
     descriptor = root / "catalog" / "repositories" / f"{repository}.json"
     entry = load_json(descriptor) if descriptor.is_file() else {}

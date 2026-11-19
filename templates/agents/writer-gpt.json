@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "writer-gpt",
+  "purpose": "Implements the approved approach in the feature worktree when GPT's proposal won, reusing existing code first",
+  "provider": "codex",
+  "model": "gpt-6.1-sol",
+  "access": "write-worktree",
+  "skills": [
+    "lean-code",
+    "council-write"
+  ]
+}

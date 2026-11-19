@@ -120,6 +120,85 @@ def check_notes_and_drift() -> None:
         assert result and result["decision"] == "block" and "tdd" in result["reason"], result
         assert stop({"stop_hook_active": True}, root) is None, "never loop the agent"
 
+        # Codex edits with one patch text; a broken note it touched gets the same feedback, in Codex's block form.
+        patch = "*** Begin Patch\n*** Add File: docs/hacks/bad.md\n+# No frontmatter\n*** End Patch"
+        result = rule_hooks.codex_post_tool(codex_event(root, "apply_patch", patch, "PostToolUse"), root)
+        assert result and result["decision"] == "block" and "missing YAML frontmatter" in result["reason"], result
+        assert "missing YAML frontmatter" in result["hookSpecificOutput"]["additionalContext"], result
+        valid = "*** Begin Patch\n*** Update File: docs/index.md\n@@\n-x\n+x\n*** End Patch"
+        assert rule_hooks.codex_post_tool(codex_event(root, "apply_patch", valid, "PostToolUse"), root) is None
+
+
+def codex_event(root: Path, tool: str, command: str, event: str = "PreToolUse") -> dict:
+    """The shape Codex 0.160.1 sends (recorded 2026-11-18): the whole patch is one text in tool_input.command."""
+    return {"session_id": "s", "turn_id": "t", "transcript_path": None, "cwd": str(root), "hook_event_name": event,
+            "model": "gpt-6.1-sol", "permission_mode": "default", "tool_name": tool, "tool_input": {"command": command},
+            "tool_use_id": "exec-1"}
+
+
+def check_codex(base: Path) -> None:
+    """Codex sends shell commands as Bash and every edit as one apply_patch text. Each rule must deny there, because
+    Codex ignores an ask (spike S2): an ask becomes a deny that tells the agent to ask the user in chat."""
+    root = base / "codex" / "di_CC"
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    entry = root / ".cc-local" / "data" / "emb"
+    entry.mkdir(parents=True)
+    (entry / "part.parquet").write_bytes(b"x")
+    (root / ".cc-local" / "hooks").mkdir()
+    manifest = {"name": "di_CC", "status": "ready",
+                "localData": [{"name": "emb", "path": ".cc-local/data/emb", "tags": ["irreplaceable"]}]}
+    (root / "control-center.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    (root / "keep.txt").write_text("keep\n", encoding="utf-8")
+    (base / "codex" / "other_CC").mkdir()
+
+    def run(tool: str, command: str) -> dict | None:
+        result = rule_hooks.codex_pre_tool(codex_event(root, tool, command), root)
+        assert decision(result) != "ask", f"Codex runs an ask without a word: {command!r}"
+        return result
+
+    def patch(*sections: str) -> str:
+        return "*** Begin Patch\n" + "\n".join(sections) + "\n*** End Patch"
+
+    denied = {
+        "irreplaceable data, shell": ("Bash", "rm -rf .cc-local/data/emb"),
+        "nix bypass (an ask in Claude Code)": ("Bash", "pytest -q"),
+        "outside the CC (an ask)": ("Bash", "cat ../other_CC/notes.txt"),
+        "second file of a patch is a generated skill copy": ("apply_patch", patch(
+            "*** Add File: new.txt\n+x", "*** Update File: keep.txt\n@@\n-keep\n+kept",
+            "*** Update File: .claude/skills/tdd/SKILL.md\n@@\n-a\n+b")),
+        "path with spaces": ("apply_patch", patch("*** Add File: .claude/skills/a b/SKILL.md\n+x")),
+        "delete of irreplaceable data": ("apply_patch", patch("*** Delete File: .cc-local/data/emb/part.parquet")),
+        "move out of irreplaceable data": ("apply_patch", patch(
+            "*** Update File: .cc-local/data/emb/part.parquet\n*** Move to: old.parquet\n@@\n x")),
+        "move into a base clone": ("apply_patch", patch("*** Update File: keep.txt\n*** Move to: repos/project/api/keep.txt\n@@\n keep")),
+        "absolute path into a reference repo": ("apply_patch", patch(f"*** Add File: {root}/repos/reference/poc/x.py\n+x")),
+        "tag removal in a hunk (an ask)": ("apply_patch", patch(
+            "*** Update File: control-center.json\n@@\n   \"tags\": [\n-   \"irreplaceable\"\n+   \"sensitive\"\n   ]")),
+        "delete of the manifest (an ask)": ("apply_patch", patch("*** Delete File: control-center.json")),
+        "stray Markdown": ("apply_patch", patch("*** Add File: NOTES.md\n+# x")),
+        "patch into the next project (an ask)": ("apply_patch", patch("*** Add File: ../other_CC/x.txt\n+x")),
+    }
+    for name, (tool, command) in denied.items():
+        result = run(tool, command)
+        assert decision(result) == "deny", (name, result)
+    reason = run("Bash", "pytest -q")["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "bypasses Nix" in reason and "ask the user" in reason, "the Claude reason, plus what to do without an ask"
+
+    allowed = {
+        "read": ("Bash", "ls -la .cc-local/data/emb"),
+        "plain edits": ("apply_patch", patch("*** Add File: docs/x.txt\n+x", "*** Update File: keep.txt\n@@\n-keep\n+kept",
+                                             "*** Delete File: old.txt")),
+        "manifest edit that keeps the tag": ("apply_patch", patch(
+            "*** Update File: control-center.json\n@@\n-  \"status\": \"ready\",\n+  \"status\": \"adapting\",")),
+        "other tools": ("update_plan", ""),
+    }
+    for name, (tool, command) in allowed.items():
+        assert run(tool, command) is None, name
+    assert rule_hooks.parse_patch(patch("*** Update File: a.py\n*** Move to: b/c d.py\n@@\n-x\n+y", "*** Delete File: e.py")) == [
+        {"op": "update", "path": "a.py", "move_to": "b/c d.py", "removed": "x\n", "added": "y\n"},
+        {"op": "delete", "path": "e.py", "move_to": None, "removed": "", "added": ""},
+    ]
+
 
 def check_isolation(base: Path) -> None:
     """Reaching into another project next to the CC asks; the CC's own repos and the rest of the machine do not."""
@@ -191,6 +270,9 @@ def check_cli() -> None:
     assert allowed.returncode == 0 and allowed.stdout == b"", "silence lets the normal permission flow decide"
     broken = subprocess.run([sys.executable, str(SCRIPT), "pre-bash"], input=b"not json", capture_output=True)
     assert broken.returncode == 1 and b"NOT enforced" in broken.stderr, "a broken hook warns and never blocks (exit 2)"
+    codex = json.dumps({"tool_name": "Bash", "tool_input": {"command": "cmake .."}})
+    result = subprocess.run([sys.executable, str(SCRIPT), "codex-pre-tool"], input=codex.encode(), capture_output=True)
+    assert result.returncode == 0 and json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def check_attributed_commits(base: Path) -> None:
@@ -435,6 +517,7 @@ def main() -> int:
         check_kit_layer(base)
         check_session_start(base)
         check_protected_data(base)
+        check_codex(base)
     check_notes_and_drift()
     check_cli()
     print("rule hooks test passed")

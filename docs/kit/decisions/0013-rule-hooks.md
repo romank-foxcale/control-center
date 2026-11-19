@@ -21,6 +21,7 @@ relations:
   - docs/kit/decisions/0021-cc-check-in-ci.md
   - docs/kit/decisions/0028-verify-before-push.md
   - docs/kit/decisions/0030-disk-management.md
+  - docs/kit/decisions/0033-codex-rule-hooks.md
 ---
 
 # Claude Code hooks enforce the hard rules early; the gates still decide
