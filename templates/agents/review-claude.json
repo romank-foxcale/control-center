@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "review-claude",
+  "purpose": "Reviews a pull request at its head against the review bar, every finding with evidence",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "access": "read-only",
+  "skills": [
+    "lean-code",
+    "council-review"
+  ]
+}

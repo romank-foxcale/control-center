@@ -22,7 +22,7 @@ WRITING_PROVIDERS = {"claude", "codex"}  # Cursor roles are read-only (docs/kit/
 # (docs/kit/decisions/0024-pinned-model-ids.md).
 FLOATING_MODELS = {"claude": {"opus", "sonnet", "haiku"}, "cursor": {"auto"}}
 ACCESS_LEVELS = {"read-only", "read-only-web", "write-worktree"}
-COUNCIL_KINDS = {"coding", "testing", "debug", "threads", "risk"}
+COUNCIL_KINDS = {"coding", "testing", "debug", "threads", "risk", "review"}
 EXPECTED_LAYOUT = {
     "projectsRoot": ".",
     "repositories": "repos",
@@ -290,6 +290,18 @@ def validate_councils(root: Path, roles: dict[str, dict[str, Any]], errors: list
                 for assessor in assessors:
                     require_role("assessor", assessor, "read-only", "read-only-web")
             require_role("judge", data.get("judge"), "read-only", "read-only-web")
+            continue
+
+        if data.get("kind") == "review":
+            # Reviewers review a PR head alone; the judge verifies their findings (./cc council review). Nothing is
+            # written but the run folder (docs/kit/decisions/0035-review-council.md).
+            reviewers = data.get("reviewers")
+            if not isinstance(reviewers, list) or len(reviewers) < 2 or len(set(map(str, reviewers))) != len(reviewers):
+                errors.append(f"{relative}: 'reviewers' must list at least two distinct roles")
+            else:
+                for reviewer in reviewers:
+                    require_role("reviewer", reviewer, "read-only")
+            require_role("judge", data.get("judge"), "read-only")
             continue
 
         if data.get("kind") == "threads":

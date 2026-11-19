@@ -11,6 +11,7 @@ import json
 import os
 import random
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -129,6 +130,17 @@ def role_prompt(root: Path, role: dict[str, Any], state: dict[str, Any], body: s
             f"Repositories in scope, relative to this directory:{repositories or ' none named; find them in the catalog'}"
         )
         return f"{skills}\n\n# Context\n\n{context}\n\n{body}"
+    if state["kind"] == "review":
+        import threads  # late: threads imports this module
+
+        context = (
+            f"Council: {state['council']} (review). Pull request: {state['repository']} #{state['pr']}, head {state['head']}. "
+            f"Targets: {', '.join(state['targets']) or 'unknown'}, stack: {', '.join(state.get('stack', [])) or 'unknown'}. "
+            "The current directory is the PR head. The Control Center's notes are under "
+            f"{(root / 'docs').as_posix()}: open a note there before you cite it."
+        )
+        return (f"{skills}\n\n# Context\n\n{context}\n\n{review_lessons(root, state['repository'])}"
+                f"# CC notes\n\nOne line per current note: a [KNOWLEDGE] finding cites one by path.\n\n{threads.notes(root)}\n\n{body}")
     context = (
         f"Council: {state['council']} ({state['kind']}). Feature: {state['feature']}. "
         f"Repository: {state['repository']}, targets: {', '.join(state['targets']) or 'unknown'}, "
@@ -274,6 +286,21 @@ def parse_verdict(summary: str) -> str | None:
     """The risk judge's verdict: a line of its own, anywhere in the reply (a judge once wrote a sentence first)."""
     match = re.search(r"(?m)^\s*VERDICT:\s*(GO-WITH-CONDITIONS|NO-GO|GO)\b", summary)
     return match.group(1) if match else None
+
+
+def parse_review_verdict(summary: str) -> str | None:
+    """The review judge's verdict, 'CLEAN' or '<n> finding(s)': a line of its own, anywhere in the reply."""
+    match = re.search(r"(?mi)^\s*VERDICT:\s*(CLEAN|(\d+)\s+findings?(?:\(s\))?)\s*$", summary)
+    if not match:
+        return None
+    if match.group(2) is None:
+        return "CLEAN"
+    count = int(match.group(2))
+    return "CLEAN" if count == 0 else f"{count} finding{'s' if count > 1 else ''}"
+
+
+# The PR diff given to reviewers; past this they read the rest with git in the PR worktree.
+REVIEW_DIFF_LIMIT = 150_000
 
 
 def tail(output: str, lines: int = 200) -> str:
@@ -671,6 +698,65 @@ class Run:
         self.save(decision=verdict)
         self.finish("done", f"verdict {verdict}; read risk.md before planning or implementing")
 
+    def review(self, council: dict[str, Any]) -> None:
+        """Review council: independent reviews of one PR head, then the judge's verified review. Nothing is written
+        but review.md and the reviews. A reviewer that fails is named and the run goes on with the others, down to two."""
+        task = (self.directory / "task.md").read_text(encoding="utf-8").strip()
+        missing: dict[str, str] = dict(self.state.get("missing") or {})
+        reviewers = [identifier for identifier in council["reviewers"] if identifier not in missing]
+        shared, before = None, {}
+        if any(self.role(identifier)["provider"] == "cursor" for identifier in [*reviewers, council["judge"]]):
+            # Cursor reads a snapshot of the PR worktree, so it cannot touch the checkout.
+            shared, before = providers.snapshot(self.worktree)
+        try:
+            self.step("review")
+            reviews: dict[str, str] = {}
+            with concurrent.futures.ThreadPoolExecutor(len(reviewers)) as pool:
+                futures = {identifier: pool.submit(self.call, identifier, task, f"review-{identifier}", shared) for identifier in reviewers}
+                for identifier, future in futures.items():
+                    try:
+                        reply = future.result()
+                    except providers.ProviderError as error:
+                        missing[identifier] = str(error).splitlines()[0][:300]
+                        continue
+                    if reply.strip():
+                        reviews[identifier] = reply
+                    else:
+                        missing[identifier] = "empty reply"
+            self.save(missing=missing)
+            if len(reviews) < 2:
+                why = "; ".join(f"{identifier}: {reason}" for identifier, reason in missing.items())
+                self.finish("failed", f"only {len(reviews)} review(s) finished, a council needs two ({why})")
+                return
+            order = list(reviews)
+            random.SystemRandom().shuffle(order)
+            labels = {chr(ord("A") + index): identifier for index, identifier in enumerate(order)}
+            self.save(labels=labels)
+            nonce = secrets.token_hex(4)
+            anonymous = "\n\n".join(
+                f"# Review {label}\n\n----- BEGIN REVIEW {label} {nonce} -----\n{reviews[identifier]}\n----- END REVIEW {label} {nonce} -----"
+                for label, identifier in labels.items()
+            )
+            self.step("review summary")
+            self.handoff(f"{', '.join(reviews)} → {council['judge']}: reviews as anonymous {', '.join(labels)}")
+            summary = self.call(council["judge"], f"{task}\n\n{anonymous}", "review", shared)
+            if shared and providers.fingerprint(shared) != before:
+                raise providers.ProviderError("a cursor role changed its read-only snapshot; the review is void")
+        finally:
+            if shared:
+                shutil.rmtree(shared, ignore_errors=True)
+        if missing:
+            with (self.directory / "review.md").open("a", encoding="utf-8") as file:
+                file.write("\n## Missing reviewers\n\n" + "".join(f"- {identifier}: {reason}\n" for identifier, reason in missing.items()))
+        say("Review authors (hidden from the judge): " + ", ".join(f"{label}: {identifier}" for label, identifier in labels.items()))
+        verdict = parse_review_verdict(summary)
+        if not verdict:
+            self.finish("failed", "the judge reply has no VERDICT line; see review.md")
+            return
+        self.save(decision=verdict)
+        absent = f"; without {', '.join(missing)}" if missing else ""
+        self.finish("done", f"{verdict}{absent}; read review.md")
+
     def finish(self, stage: str, summary: str) -> None:
         self.save(stage=stage, summary=summary, finishedAt=now())
         self.events.emit(events.END, f"{stage}: {summary}", ok=stage == "done", stage=stage)
@@ -735,6 +821,9 @@ def pipeline_council(root: Path, identifier: str) -> dict[str, Any]:
                          "change its roles with ./cc council set-role")
     if council.get("kind") == "risk":
         raise ValueError(f"council {identifier} audits a planned change: run ./cc council risk --task <change>; "
+                         "change its roles with ./cc council set-role")
+    if council.get("kind") == "review":
+        raise ValueError(f"council {identifier} reviews pull requests: run ./cc council review <repo> <number>; "
                          "change its roles with ./cc council set-role")
     return council
 
@@ -850,6 +939,76 @@ def command_run(root: Path, args: argparse.Namespace) -> None:
     run = Run(root, directory)
     with Ticker(run):
         run.propose_and_judge(council)
+
+
+def review_task(pr_text: str, context: str) -> str:
+    """The PR as reviewers and the judge see it: data between markers they cannot forge, with the diff capped."""
+    if len(pr_text) > REVIEW_DIFF_LIMIT:
+        pr_text = (pr_text[:REVIEW_DIFF_LIMIT] + "\n\n(the diff is cut here; read the rest with "
+                   "`git diff $(git merge-base HEAD origin/<base>)..HEAD` in the PR worktree)")
+    if context.strip():
+        pr_text += f"\n\nlinked context (cards and notes given by the reviewer's session):\n{context.strip()}"
+    nonce = secrets.token_hex(4)
+    return f"# Pull request\n\n----- BEGIN PR {nonce} -----\n{pr_text}\n----- END PR {nonce} -----"
+
+
+def command_review(root: Path, args: argparse.Namespace) -> None:
+    import prs  # late: prs is a sibling script, imported only where a PR is needed
+
+    council = council_config(root, args.council)
+    if council.get("kind") != "review":
+        raise ValueError(f"council {args.council} is a {council.get('kind')} council, not a review council")
+    missing: dict[str, str] = {}
+    for slot in council["reviewers"]:
+        role = load_json(root / "catalog" / "agents" / f"{slot}.json")
+        available, detail = providers.login_status(role["provider"])
+        if not available:
+            missing[slot] = f"{role['provider']}: {detail}"
+    judge = load_json(root / "catalog" / "agents" / f"{council['judge']}.json")
+    available, detail = providers.login_status(judge["provider"])
+    if not available:
+        raise ValueError(f"role {judge['id']} needs {judge['provider']}: {detail}")
+    if len(council["reviewers"]) - len(missing) < 2:
+        raise ValueError("a review council needs two reviewers that can run: " + "; ".join(f"{k} ({v})" for k, v in missing.items()))
+    context = Path(args.context_file).read_text(encoding="utf-8") if args.context_file else ""
+    say(prs.checkout(root, args.repo, args.number))
+    layout = load_json(root / "control-center.json")["layout"]
+    feature = f"pr-{args.repo}-{args.number}"
+    worktree = (root / layout["worktrees"]).resolve() / feature / f"{args.repo}_wt"
+    task = review_task(prs.show(root, args.repo, args.number, diff=True), context)
+    descriptor = root / "catalog" / "repositories" / f"{args.repo}.json"
+    entry = load_json(descriptor) if descriptor.is_file() else {}
+    identifier = f"{datetime.datetime.now():%Y%m%d-%H%M%S}-{council['id']}-{args.repo}-{args.number}"
+    directory = root / ".cc-local" / "runs" / identifier
+    directory.mkdir(parents=True)
+    # The PR text and diff go to a file of their own; state.json stays small enough to list and poll.
+    (directory / "task.md").write_text(task + "\n", encoding="utf-8")
+    write_json(
+        directory / "state.json",
+        {
+            "id": identifier,
+            "council": council["id"],
+            "kind": "review",
+            "feature": feature,
+            "repository": args.repo,
+            "pr": args.number,
+            "head": git(worktree, "rev-parse", "--short", "HEAD").strip(),
+            "worktree": str(worktree),
+            "targets": entry.get("targets", []),
+            "stack": entry.get("stack", []),
+            "task": f"Review {args.repo} #{args.number}",
+            "missing": missing,
+            "stage": "reviewing",
+            "plan": progress.plan("review", council),
+            "startedAt": now(),
+        },
+    )
+    if missing:
+        say("not running: " + "; ".join(f"{k} ({v})" for k, v in missing.items()))
+    say(f"run {identifier}: review council on {args.repo} #{args.number}")
+    run = Run(root, directory)
+    with Ticker(run):
+        run.review(council)
 
 
 def command_approve(root: Path, args: argparse.Namespace) -> None:
@@ -982,6 +1141,13 @@ def parser() -> argparse.ArgumentParser:
     risk_task.add_argument("--task")
     risk_task.add_argument("--task-file")
     risk.set_defaults(handler=command_risk)
+
+    review = subparsers.add_parser("review", help="review a catalog pull request with independent reviewers and a judge")
+    review.add_argument("repo", help="catalog repository id")
+    review.add_argument("number", type=int, help="pull request number")
+    review.add_argument("--council", default="review", help="review council id in catalog/councils")
+    review.add_argument("--context-file", help="extra data for the reviewers, such as linked Trello card texts")
+    review.set_defaults(handler=command_review)
 
     approve = subparsers.add_parser("approve", help="approve the verdict and let the writer implement it")
     approve.add_argument("run")

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Council Reviewer"
+  short_description: "Role for reviewers in a review council run"
+  default_prompt: "Run ./cc council review; this role skill is loaded by the runner."
+policy:
+  allow_implicit_invocation: false

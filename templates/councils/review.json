@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "review",
+  "kind": "review",
+  "purpose": "Independent models review a pull request at its head; an anonymous judge verifies every finding against the code and writes one review (./cc council review)",
+  "reviewers": [
+    "review-claude",
+    "review-gpt",
+    "review-grok"
+  ],
+  "judge": "review-judge"
+}
