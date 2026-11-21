@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "review-gpt",
+  "purpose": "Reviews a pull request at its head against the review bar, every finding with evidence",
+  "provider": "codex",
+  "model": "gpt-6.1-sol",
+  "access": "read-only",
+  "skills": [
+    "lean-code",
+    "council-review"
+  ]
+}

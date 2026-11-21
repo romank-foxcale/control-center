@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "review-judge",
+  "purpose": "Verifies anonymous pull request reviews against the code and writes one review with a verdict",
+  "provider": "claude",
+  "model": "claude-opus-5-5",
+  "access": "read-only",
+  "skills": [
+    "council-review-judge"
+  ]
+}
